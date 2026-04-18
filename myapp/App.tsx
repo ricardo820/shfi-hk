@@ -4,16 +4,36 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
+  SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
+import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
-import { login, register, setAuthToken, User } from './src/api';
+import {
+  createRoom,
+  createRoomTransaction,
+  joinRoom,
+  listRoomMembers,
+  listRooms,
+  listRoomTransactions,
+  login,
+  register,
+  Room,
+  RoomMemberEntry,
+  RoomTransaction,
+  setAuthToken,
+  User,
+} from './src/api';
 
 type AuthMode = 'login' | 'register';
 
@@ -21,6 +41,47 @@ const STORAGE_KEYS = {
   token: 'auth_token',
   user: 'auth_user',
 };
+
+type NavItem = {
+  key: 'home' | 'assets' | 'market' | 'profile';
+  label: 'Home' | 'Assets' | 'Market' | 'Profile';
+  icon: 'grid-view' | 'account-balance-wallet' | 'monitor' | 'person';
+};
+
+const NAV_ITEMS: NavItem[] = [
+  { key: 'home', label: 'Home', icon: 'grid-view' },
+  { key: 'assets', label: 'Assets', icon: 'account-balance-wallet' },
+  { key: 'market', label: 'Market', icon: 'monitor' },
+  { key: 'profile', label: 'Profile', icon: 'person' },
+];
+
+function BottomNavBar() {
+  return (
+    <View style={styles.bottomNavShell}>
+      {NAV_ITEMS.map((item) => {
+        const isActive = item.key === 'home';
+
+        return (
+          <Pressable
+            key={item.key}
+            style={({ pressed }) => [
+              styles.navItem,
+              isActive && styles.navItemActive,
+              pressed && styles.navItemPressed,
+            ]}
+          >
+            <MaterialIcons
+              name={item.icon}
+              size={22}
+              color={isActive ? '#2E5BFF' : '#8E90A2'}
+            />
+            <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 export default function App() {
   const [mode, setMode] = useState<AuthMode>('login');
@@ -31,6 +92,29 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [authenticatedUser, setAuthenticatedUser] = useState<User | null>(null);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [roomsError, setRoomsError] = useState('');
+  const [roomStatusMessage, setRoomStatusMessage] = useState('');
+  const [isAddRoomModalVisible, setAddRoomModalVisible] = useState(false);
+  const [isCreateRoomModalVisible, setCreateRoomModalVisible] = useState(false);
+  const [isJoinScannerVisible, setJoinScannerVisible] = useState(false);
+  const [createRoomName, setCreateRoomName] = useState('');
+  const [roomActionLoading, setRoomActionLoading] = useState(false);
+  const [hasProcessedScan, setHasProcessedScan] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [openedRoom, setOpenedRoom] = useState<Room | null>(null);
+  const [roomMembers, setRoomMembers] = useState<RoomMemberEntry[]>([]);
+  const [roomTransactions, setRoomTransactions] = useState<RoomTransaction[]>([]);
+  const [roomDetailsLoading, setRoomDetailsLoading] = useState(false);
+  const [roomDetailsError, setRoomDetailsError] = useState('');
+  const [roomDetailsStatus, setRoomDetailsStatus] = useState('');
+  const [isInviteModalVisible, setInviteModalVisible] = useState(false);
+  const [isAddTransactionModalVisible, setAddTransactionModalVisible] = useState(false);
+  const [transactionCompanyName, setTransactionCompanyName] = useState('');
+  const [transactionItemName, setTransactionItemName] = useState('');
+  const [transactionItemCount, setTransactionItemCount] = useState('1');
+  const [transactionUnitPrice, setTransactionUnitPrice] = useState('0');
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -68,6 +152,226 @@ export default function App() {
     () => (mode === 'login' ? 'Switch to Register' : 'Switch to Sign In'),
     [mode]
   );
+
+  const fetchRooms = async () => {
+    try {
+      setRoomsLoading(true);
+      setRoomsError('');
+      const response = await listRooms();
+      setRooms(response.rooms ?? []);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to load rooms right now.';
+        setRoomsError(message);
+      } else {
+        setRoomsError('Unable to load rooms right now.');
+      }
+    } finally {
+      setRoomsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (authenticatedUser) {
+      void fetchRooms();
+    }
+  }, [authenticatedUser]);
+
+  const fetchRoomDetails = async (room: Room) => {
+    try {
+      setRoomDetailsLoading(true);
+      setRoomDetailsError('');
+      const [membersResponse, transactionsResponse] = await Promise.all([
+        listRoomMembers(room.id),
+        listRoomTransactions(room.id),
+      ]);
+      setRoomMembers(membersResponse.members ?? []);
+      setRoomTransactions(transactionsResponse.transactions ?? []);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to load room details right now.';
+        setRoomDetailsError(message);
+      } else {
+        setRoomDetailsError('Unable to load room details right now.');
+      }
+    } finally {
+      setRoomDetailsLoading(false);
+    }
+  };
+
+  const openRoom = async (room: Room) => {
+    setOpenedRoom(room);
+    setRoomDetailsStatus('');
+    await fetchRoomDetails(room);
+  };
+
+  const submitTransaction = async () => {
+    if (!openedRoom || !authenticatedUser) {
+      return;
+    }
+
+    const companyName = transactionCompanyName.trim();
+    const itemName = transactionItemName.trim();
+    const itemCount = Number(transactionItemCount);
+    const unitPrice = Number(transactionUnitPrice);
+
+    if (!companyName || !itemName || !Number.isFinite(itemCount) || !Number.isFinite(unitPrice)) {
+      setRoomDetailsError('Please fill all transaction fields with valid values.');
+      return;
+    }
+
+    if (itemCount <= 0 || unitPrice < 0) {
+      setRoomDetailsError('Item count must be greater than 0 and unit price must be at least 0.');
+      return;
+    }
+
+    try {
+      setRoomActionLoading(true);
+      setRoomDetailsError('');
+      await createRoomTransaction(openedRoom.id, {
+        companyName,
+        ownerUserId: authenticatedUser.id,
+        items: [
+          {
+            itemName,
+            itemCount,
+            unitPrice,
+          },
+        ],
+      });
+      setAddTransactionModalVisible(false);
+      setTransactionCompanyName('');
+      setTransactionItemName('');
+      setTransactionItemCount('1');
+      setTransactionUnitPrice('0');
+      setRoomDetailsStatus('Transaction created successfully.');
+      await fetchRoomDetails(openedRoom);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to create transaction right now.';
+        setRoomDetailsError(message);
+      } else {
+        setRoomDetailsError('Unable to create transaction right now.');
+      }
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const extractInviteCode = (rawValue: string): string => {
+    const value = rawValue.trim();
+
+    try {
+      const parsedUrl = new URL(value);
+      const inviteCodeFromQuery = parsedUrl.searchParams.get('inviteCode');
+
+      if (inviteCodeFromQuery) {
+        return inviteCodeFromQuery.trim();
+      }
+    } catch {
+      return value;
+    }
+
+    return value;
+  };
+
+  const joinRoomFromInvite = async (rawInviteCode: string) => {
+    const inviteCode = extractInviteCode(rawInviteCode);
+
+    if (!inviteCode) {
+      setRoomsError('Scanned code does not contain a valid invite code.');
+      return;
+    }
+
+    try {
+      setRoomActionLoading(true);
+      setRoomsError('');
+      const response = await joinRoom({ inviteCode });
+      setRoomStatusMessage(response.message || `Joined ${response.room.name}.`);
+      setJoinScannerVisible(false);
+      setAddRoomModalVisible(false);
+      setHasProcessedScan(false);
+      await fetchRooms();
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to join room with this invite code.';
+        setRoomsError(message);
+      } else {
+        setRoomsError('Unable to join room with this invite code.');
+      }
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const onScannedCode = async (result: BarcodeScanningResult) => {
+    if (hasProcessedScan || roomActionLoading) {
+      return;
+    }
+
+    setHasProcessedScan(true);
+    await joinRoomFromInvite(result.data);
+  };
+
+  const onCreateRoom = async () => {
+    const trimmedName = createRoomName.trim();
+
+    if (trimmedName.length < 3 || trimmedName.length > 120) {
+      setRoomsError('Room name must be between 3 and 120 characters.');
+      return;
+    }
+
+    try {
+      setRoomActionLoading(true);
+      setRoomsError('');
+      const response = await createRoom({ name: trimmedName });
+      setCreateRoomModalVisible(false);
+      setAddRoomModalVisible(false);
+      setCreateRoomName('');
+      setRoomStatusMessage(response.message || `Room ${response.room.name} created.`);
+      await fetchRooms();
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to create room right now.';
+        setRoomsError(message);
+      } else {
+        setRoomsError('Unable to create room right now.');
+      }
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const openJoinScanner = async () => {
+    setAddRoomModalVisible(false);
+    setHasProcessedScan(false);
+    setRoomsError('');
+
+    if (!cameraPermission?.granted) {
+      const permissionResult = await requestCameraPermission();
+      if (!permissionResult.granted) {
+        setRoomsError('Camera permission is required to scan room QR codes.');
+        return;
+      }
+    }
+
+    setJoinScannerVisible(true);
+  };
 
   const onSubmit = async () => {
     const normalizedEmail = email.trim().toLowerCase();
@@ -124,7 +428,7 @@ export default function App() {
     return (
       <View style={styles.homeScreen}>
         <ActivityIndicator color="#B8C3FF" />
-        <Text style={styles.homeSubtitle}>Restoring session...</Text>
+        <Text style={styles.restoreText}>Restoring session...</Text>
         <StatusBar style="light" />
       </View>
     );
@@ -132,31 +436,388 @@ export default function App() {
 
   if (authenticatedUser) {
     return (
-      <View style={styles.homeScreen}>
-        <View style={styles.homeCard}>
-          <Text style={styles.homeTitle}>Homepage</Text>
-          <Text style={styles.homeSubtitle}>Welcome, {authenticatedUser.email}</Text>
-          <Pressable
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}
-            onPress={() => {
-              setAuthToken(null);
-              void Promise.all([
-                AsyncStorage.removeItem(STORAGE_KEYS.token),
-                AsyncStorage.removeItem(STORAGE_KEYS.user),
-              ]);
-              setAuthenticatedUser(null);
-              setEmail('');
-              setPassword('');
-              setAuthError('');
-              setStatusMessage('');
-              setMode('login');
-            }}
-          >
-            <Text style={styles.secondaryButtonText}>Log Out</Text>
-          </Pressable>
+      <SafeAreaView style={styles.homeScreen}>
+        <View style={styles.roomsContentWrap}>
+          {openedRoom ? (
+            <>
+              <View style={styles.roomDetailsTopBar}>
+                <Pressable
+                  style={({ pressed }) => [styles.roomBackButton, pressed && styles.modalOptionPressed]}
+                  onPress={() => {
+                    setOpenedRoom(null);
+                    setRoomDetailsError('');
+                    setRoomDetailsStatus('');
+                  }}
+                >
+                  <MaterialIcons name="arrow-back" size={18} color="#E5E2E3" />
+                  <Text style={styles.roomBackText}>Rooms</Text>
+                </Pressable>
+              </View>
+
+              <ScrollView
+                style={styles.roomsScroll}
+                contentContainerStyle={styles.roomsScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.roomsHeader}>
+                  <Text style={styles.roomsHeaderKicker}>Room</Text>
+                  <Text style={styles.roomsHeaderTitleSmall}>{openedRoom.name}</Text>
+                </View>
+
+                <View style={styles.roomActionRow}>
+                  <Pressable
+                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    onPress={() => setInviteModalVisible(true)}
+                  >
+                    <MaterialIcons name="qr-code" size={20} color="#B8C3FF" />
+                    <Text style={styles.roomActionText}>Invite by QR</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    onPress={() => setAddTransactionModalVisible(true)}
+                  >
+                    <MaterialIcons name="add-circle" size={20} color="#B8C3FF" />
+                    <Text style={styles.roomActionText}>Add Transaction</Text>
+                  </Pressable>
+                </View>
+
+                {roomDetailsLoading ? (
+                  <View style={styles.roomsLoadingWrap}>
+                    <ActivityIndicator color="#B8C3FF" />
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.sectionCard}>
+                      <Text style={styles.sectionTitle}>Members</Text>
+                      {roomMembers.length > 0 ? (
+                        roomMembers.map((entry) => (
+                          <View key={entry.user.id} style={styles.memberRow}>
+                            <Text style={styles.memberEmail}>{entry.user.email}</Text>
+                            <Text style={styles.memberRole}>{entry.membership.role}</Text>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.emptyStateText}>No members found.</Text>
+                      )}
+                    </View>
+
+                    <View style={styles.sectionCard}>
+                      <Text style={styles.sectionTitle}>Transactions</Text>
+                      {roomTransactions.length > 0 ? (
+                        roomTransactions.map((transaction) => (
+                          <View key={transaction.id} style={styles.transactionCard}>
+                            <View style={styles.transactionHead}>
+                              <Text style={styles.transactionCompany}>{transaction.companyName}</Text>
+                              <Text style={styles.transactionTotal}>
+                                ${transaction.totalAmount.toFixed(2)}
+                              </Text>
+                            </View>
+                            <Text style={styles.transactionMeta}>
+                              {transaction.items.length} item(s) • {transaction.owner.email}
+                            </Text>
+                          </View>
+                        ))
+                      ) : (
+                        <Text style={styles.emptyStateText}>No transactions found.</Text>
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {roomDetailsError ? <Text style={styles.roomsErrorText}>{roomDetailsError}</Text> : null}
+                {roomDetailsStatus ? <Text style={styles.roomsSuccessText}>{roomDetailsStatus}</Text> : null}
+              </ScrollView>
+            </>
+          ) : (
+            <>
+              <View style={styles.roomsHeader}>
+                <Text style={styles.roomsHeaderKicker}>Management</Text>
+                <Text style={styles.roomsHeaderTitle}>Rooms</Text>
+              </View>
+
+              <ScrollView
+                style={styles.roomsScroll}
+                contentContainerStyle={styles.roomsScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {roomsLoading ? (
+                  <View style={styles.roomsLoadingWrap}>
+                    <ActivityIndicator color="#B8C3FF" />
+                  </View>
+                ) : rooms.length > 0 ? (
+                  rooms.map((room) => (
+                    <Pressable
+                      key={room.id}
+                      style={({ pressed }) => [styles.roomCardOuter, pressed && styles.roomCardPressed]}
+                      onPress={() => {
+                        void openRoom(room);
+                      }}
+                    >
+                      <View style={styles.roomCardInner}>
+                        <View style={styles.roomCardLeftGroup}>
+                          <View style={styles.roomIconWrap}>
+                            <MaterialIcons name="apartment" size={28} color="#2E5BFF" />
+                          </View>
+                          <View>
+                            <Text style={styles.roomTitle}>{room.name}</Text>
+                            <Text style={styles.roomMeta}>Shared Space</Text>
+                          </View>
+                        </View>
+                        <MaterialIcons name="chevron-right" size={24} color="#5D5F6B" />
+                      </View>
+                    </Pressable>
+                  ))
+                ) : null}
+
+                <Pressable
+                  style={({ pressed }) => [styles.addRoomButton, pressed && styles.addRoomButtonPressed]}
+                  onPress={() => {
+                    setRoomStatusMessage('');
+                    setAddRoomModalVisible(true);
+                  }}
+                >
+                  <MaterialIcons name="add-circle" size={24} color="#8E90A2" />
+                  <Text style={styles.addRoomButtonText}>Add New Room</Text>
+                </Pressable>
+
+                {roomsError ? <Text style={styles.roomsErrorText}>{roomsError}</Text> : null}
+                {roomStatusMessage ? <Text style={styles.roomsSuccessText}>{roomStatusMessage}</Text> : null}
+              </ScrollView>
+            </>
+          )}
         </View>
+
+        <Modal
+          visible={isInviteModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setInviteModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Invite to {openedRoom?.name}</Text>
+              {openedRoom ? (
+                <View style={styles.inviteQrWrap}>
+                  <View style={styles.inviteQrImage}>
+                    <QRCode
+                      value={`shfi://join?inviteCode=${openedRoom.inviteCode}`}
+                      size={200}
+                      color="#0D0D0E"
+                      backgroundColor="#FFFFFF"
+                    />
+                  </View>
+                </View>
+              ) : null}
+              <Text style={styles.inviteCodeText}>Invite code: {openedRoom?.inviteCode}</Text>
+              <Pressable
+                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                onPress={() => setInviteModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isAddTransactionModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setAddTransactionModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Add Transaction</Text>
+              <TextInput
+                placeholder="Company name"
+                placeholderTextColor="#8E90A2"
+                style={styles.modalInput}
+                value={transactionCompanyName}
+                onChangeText={setTransactionCompanyName}
+                editable={!roomActionLoading}
+              />
+              <TextInput
+                placeholder="Item name"
+                placeholderTextColor="#8E90A2"
+                style={styles.modalInput}
+                value={transactionItemName}
+                onChangeText={setTransactionItemName}
+                editable={!roomActionLoading}
+              />
+              <View style={styles.txInputRow}>
+                <TextInput
+                  placeholder="Count"
+                  placeholderTextColor="#8E90A2"
+                  style={[styles.modalInput, styles.txInputHalf]}
+                  keyboardType="number-pad"
+                  value={transactionItemCount}
+                  onChangeText={setTransactionItemCount}
+                  editable={!roomActionLoading}
+                />
+                <TextInput
+                  placeholder="Unit price"
+                  placeholderTextColor="#8E90A2"
+                  style={[styles.modalInput, styles.txInputHalf]}
+                  keyboardType="decimal-pad"
+                  value={transactionUnitPrice}
+                  onChangeText={setTransactionUnitPrice}
+                  editable={!roomActionLoading}
+                />
+              </View>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modalPrimaryButton,
+                  pressed && styles.modalOptionPressed,
+                  roomActionLoading && styles.buttonDisabled,
+                ]}
+                onPress={() => {
+                  void submitTransaction();
+                }}
+                disabled={roomActionLoading}
+              >
+                {roomActionLoading ? (
+                  <ActivityIndicator color="#EFEFFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryText}>Save Transaction</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                onPress={() => setAddTransactionModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isAddRoomModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setAddRoomModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Add New Room</Text>
+              <Pressable
+                style={({ pressed }) => [styles.modalOptionButton, pressed && styles.modalOptionPressed]}
+                onPress={() => {
+                  setAddRoomModalVisible(false);
+                  setCreateRoomModalVisible(true);
+                }}
+              >
+                <Text style={styles.modalOptionText}>Create New Room</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalOptionButton, pressed && styles.modalOptionPressed]}
+                onPress={() => {
+                  void openJoinScanner();
+                }}
+              >
+                <Text style={styles.modalOptionText}>Join Existing Room (Scan QR)</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                onPress={() => setAddRoomModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isCreateRoomModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setCreateRoomModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Create New Room</Text>
+              <TextInput
+                placeholder="Room name"
+                placeholderTextColor="#8E90A2"
+                style={styles.modalInput}
+                value={createRoomName}
+                onChangeText={setCreateRoomName}
+                editable={!roomActionLoading}
+              />
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modalPrimaryButton,
+                  pressed && styles.modalOptionPressed,
+                  roomActionLoading && styles.buttonDisabled,
+                ]}
+                onPress={() => {
+                  void onCreateRoom();
+                }}
+                disabled={roomActionLoading}
+              >
+                {roomActionLoading ? (
+                  <ActivityIndicator color="#EFEFFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryText}>Create</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                onPress={() => {
+                  setCreateRoomModalVisible(false);
+                  setCreateRoomName('');
+                }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isJoinScannerVisible}
+          animationType="slide"
+          onRequestClose={() => {
+            setJoinScannerVisible(false);
+            setHasProcessedScan(false);
+          }}
+        >
+          <SafeAreaView style={styles.scannerScreen}>
+            <View style={styles.scannerTopBar}>
+              <Text style={styles.scannerTitle}>Scan Room QR</Text>
+              <Pressable
+                style={({ pressed }) => [styles.scannerCloseBtn, pressed && styles.modalOptionPressed]}
+                onPress={() => {
+                  setJoinScannerVisible(false);
+                  setHasProcessedScan(false);
+                }}
+              >
+                <Text style={styles.scannerCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <View style={styles.scannerFrameWrap}>
+              {cameraPermission?.granted ? (
+                <CameraView
+                  style={styles.scannerCamera}
+                  facing="back"
+                  onBarcodeScanned={onScannedCode}
+                  barcodeScannerSettings={{
+                    barcodeTypes: ['qr'],
+                  }}
+                />
+              ) : (
+                <View style={styles.scannerPermissionFallback}>
+                  <Text style={styles.scannerHint}>Camera permission is required to scan QR codes.</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.scannerHint}>Point the camera at a room invite QR code.</Text>
+          </SafeAreaView>
+        </Modal>
+
+        <BottomNavBar />
         <StatusBar style="light" />
-      </View>
+      </SafeAreaView>
     );
   }
 
@@ -393,28 +1054,432 @@ const styles = StyleSheet.create({
   homeScreen: {
     flex: 1,
     backgroundColor: '#131314',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
   },
-  homeCard: {
+  homeContentWrap: {
+    display: 'none',
+  },
+  roomsContentWrap: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 104,
+  },
+  roomsHeader: {
+    marginBottom: 18,
+  },
+  roomsHeaderKicker: {
+    color: '#2E5BFF',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  roomsHeaderTitle: {
+    color: '#FFFFFF',
+    fontSize: 38,
+    fontWeight: '800',
+    letterSpacing: -1,
+  },
+  roomsScroll: {
+    flex: 1,
+  },
+  roomsScrollContent: {
+    gap: 12,
+    paddingBottom: 22,
+  },
+  roomsLoadingWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+  },
+  roomCardOuter: {
     width: '100%',
-    maxWidth: 420,
-    borderRadius: 16,
+    borderRadius: 14,
     backgroundColor: '#1C1B1C',
     borderWidth: 1,
     borderColor: '#353436',
-    padding: 20,
-    gap: 14,
+    padding: 1,
   },
-  homeTitle: {
+  roomCardPressed: {
+    transform: [{ scale: 0.985 }],
+    opacity: 0.96,
+  },
+  roomCardInner: {
+    borderRadius: 13,
+    backgroundColor: '#131314',
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  roomCardLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    flexShrink: 1,
+  },
+  roomIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#353436',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roomTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  roomMeta: {
+    marginTop: 3,
+    color: '#778',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  addRoomButton: {
+    marginTop: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  addRoomButtonPressed: {
+    opacity: 0.85,
+  },
+  addRoomButtonText: {
+    color: '#B3B5C5',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  roomsErrorText: {
+    color: '#FFB4AB',
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 6,
+  },
+  roomsSuccessText: {
+    color: '#A6B4FF',
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 6,
+  },
+  roomDetailsTopBar: {
+    marginBottom: 8,
+  },
+  roomBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  roomBackText: {
     color: '#E5E2E3',
-    fontSize: 28,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  roomsHeaderTitleSmall: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+  },
+  roomActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  roomActionButton: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#353436',
+    backgroundColor: '#1C1B1C',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 4,
+  },
+  roomActionText: {
+    color: '#D4D5E2',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sectionCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#353436',
+    backgroundColor: '#1C1B1C',
+    padding: 14,
+    marginBottom: 12,
+    gap: 8,
+  },
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#131314',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2A2A2B',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  memberEmail: {
+    color: '#E5E2E3',
+    fontSize: 13,
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  memberRole: {
+    color: '#A6B4FF',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginLeft: 10,
+  },
+  transactionCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2A2A2B',
+    backgroundColor: '#131314',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  transactionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  transactionCompany: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  transactionTotal: {
+    color: '#B8C3FF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  transactionMeta: {
+    color: '#9FA2B5',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  emptyStateText: {
+    color: '#9FA2B5',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  inviteQrWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+  },
+  inviteQrImage: {
+    width: 220,
+    height: 220,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  inviteCodeText: {
+    color: '#C4C5D9',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  txInputRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  txInputHalf: {
+    flex: 1,
+  },
+  restoreText: {
+    color: '#C4C5D9',
+    fontSize: 14,
+    marginTop: 10,
+  },
+  bottomNavShell: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingTop: 10,
+    paddingBottom: 22,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: 'rgba(13, 13, 14, 0.94)',
+  },
+  navItem: {
+    minWidth: 72,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 5,
+  },
+  navItemActive: {
+    backgroundColor: 'rgba(46, 91, 255, 0.12)',
+  },
+  navItemPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.95 }],
+  },
+  navLabel: {
+    marginTop: 3,
+    color: '#8E90A2',
+    fontSize: 10,
+    fontWeight: '500',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  navLabelActive: {
+    color: '#2E5BFF',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#353436',
+    backgroundColor: '#1C1B1C',
+    padding: 16,
+    gap: 10,
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  modalOptionButton: {
+    borderRadius: 10,
+    backgroundColor: '#2A2A2B',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  modalOptionText: {
+    color: '#E5E2E3',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalOptionPressed: {
+    opacity: 0.85,
+  },
+  modalCancelButton: {
+    borderRadius: 10,
+    backgroundColor: '#353436',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    color: '#E5E2E3',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalInput: {
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#434656',
+    backgroundColor: '#131314',
+    color: '#E5E2E3',
+    paddingHorizontal: 12,
+    fontSize: 15,
+  },
+  modalPrimaryButton: {
+    borderRadius: 10,
+    backgroundColor: '#2E5BFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  modalPrimaryText: {
+    color: '#EFEFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  scannerScreen: {
+    flex: 1,
+    backgroundColor: '#0D0D0E',
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    paddingBottom: 24,
+  },
+  scannerTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  scannerTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
     fontWeight: '800',
   },
-  homeSubtitle: {
+  scannerCloseBtn: {
+    borderRadius: 8,
+    backgroundColor: '#2A2A2B',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  scannerCloseText: {
+    color: '#E5E2E3',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  scannerFrameWrap: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#353436',
+    backgroundColor: '#1C1B1C',
+  },
+  scannerCamera: {
+    flex: 1,
+  },
+  scannerPermissionFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  scannerHint: {
     color: '#C4C5D9',
-    fontSize: 16,
-    marginBottom: 8,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 14,
   },
 });

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SHFI - Rooms</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-error": "#690005",
+                        "secondary-container": "#33438c",
+                        "on-primary": "#002388",
+                        "outline": "#8e90a2",
+                        "on-background": "#e5e2e3",
+                        "on-tertiary-container": "#ffece6",
+                        "primary": "#b8c3ff",
+                        "surface-dim": "#131314",
+                        "on-tertiary-fixed": "#380d00",
+                        "error-container": "#93000a",
+                        "background": "#131314",
+                        "outline-variant": "#434656",
+                        "on-surface-variant": "#c4c5d9",
+                        "secondary-fixed-dim": "#b8c3ff",
+                        "inverse-surface": "#e5e2e3",
+                        "error": "#ffb4ab",
+                        "surface-container-highest": "#353436",
+                        "surface-variant": "#353436",
+                        "on-secondary": "#172972",
+                        "tertiary": "#ffb59b",
+                        "surface-container-lowest": "#0e0e0f",
+                        "surface": "#131314",
+                        "primary-fixed-dim": "#b8c3ff",
+                        "surface-container-low": "#1c1b1c",
+                        "surface-container": "#201f20",
+                        "primary-container": "#2e5bff",
+                        "on-secondary-container": "#a6b4ff",
+                        "surface-bright": "#39393a",
+                        "on-primary-fixed": "#001356",
+                        "tertiary-fixed": "#ffdbcf",
+                        "tertiary-container": "#c24100",
+                        "on-primary-fixed-variant": "#0035be",
+                        "inverse-primary": "#124af0",
+                        "secondary": "#b8c3ff",
+                        "on-secondary-fixed-variant": "#304189",
+                        "on-tertiary-fixed-variant": "#812800",
+                        "primary-fixed": "#dde1ff",
+                        "on-surface": "#e5e2e3",
+                        "on-primary-container": "#efefff",
+                        "tertiary-fixed-dim": "#ffb59b",
+                        "secondary-fixed": "#dde1ff",
+                        "inverse-on-surface": "#313031",
+                        "on-secondary-fixed": "#001356",
+                        "surface-container-high": "#2a2a2b",
+                        "surface-tint": "#b8c3ff",
+                        "on-tertiary": "#5b1a00",
+                        "on-error-container": "#ffdad6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.5rem",
+                        "lg": "1rem",
+                        "xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            }
+        }
+    </script>
+<style>
+        body { background-color: #0D0D0E; font-family: 'Inter', sans-serif; }
+        .glass-card {
+            background: rgba(32, 31, 32, 0.6);
+            backdrop-filter: blur(12px);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="text-on-surface selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar -->
+
+<!-- Main Content -->
+<main class="pt-24 pb-32 px-6 max-w-2xl mx-auto">
+<header class="mb-10">
+<p class="text-[10px] font-bold tracking-[0.2em] text-[#2E5BFF] uppercase mb-2">Management</p>
+<h1 class="text-4xl font-extrabold tracking-tighter text-white">Rooms</h1>
+</header>
+<section class="space-y-4">
+<!-- Room Item: Apartment 4B -->
+<button class="w-full group relative overflow-hidden rounded-xl bg-surface-container-low p-1 transition-all duration-300 hover:scale-[1.02] active:scale-95">
+<div class="relative z-10 flex items-center justify-between px-6 py-8 rounded-lg bg-[#131314] glass-card">
+<div class="flex items-center gap-6">
+<div class="w-14 h-14 rounded-full bg-surface-container-highest flex items-center justify-center text-[#2E5BFF]">
+<span class="material-symbols-outlined text-3xl" data-icon="apartment">apartment</span>
+</div>
+<div class="text-left">
+<h3 class="text-xl font-bold text-white tracking-tight">Apartment 4B</h3>
+<p class="text-xs text-slate-500 uppercase tracking-widest font-medium mt-1">Primary Residence</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-[#2E5BFF] transition-colors" data-icon="chevron_right">chevron_right</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-br from-[#2E5BFF]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</button>
+<!-- Room Item: Summer Trip 2024 -->
+<button class="w-full group relative overflow-hidden rounded-xl bg-surface-container-low p-1 transition-all duration-300 hover:scale-[1.02] active:scale-95">
+<div class="relative z-10 flex items-center justify-between px-6 py-8 rounded-lg bg-[#131314] glass-card">
+<div class="flex items-center gap-6">
+<div class="w-14 h-14 rounded-full bg-surface-container-highest flex items-center justify-center text-[#2E5BFF]">
+<span class="material-symbols-outlined text-3xl" data-icon="travel_explore">travel_explore</span>
+</div>
+<div class="text-left">
+<h3 class="text-xl font-bold text-white tracking-tight">Summer Trip 2024</h3>
+<p class="text-xs text-slate-500 uppercase tracking-widest font-medium mt-1">Shared Space</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-[#2E5BFF] transition-colors" data-icon="chevron_right">chevron_right</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-br from-[#2E5BFF]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</button>
+<!-- Room Item: Family Home -->
+<button class="w-full group relative overflow-hidden rounded-xl bg-surface-container-low p-1 transition-all duration-300 hover:scale-[1.02] active:scale-95">
+<div class="relative z-10 flex items-center justify-between px-6 py-8 rounded-lg bg-[#131314] glass-card">
+<div class="flex items-center gap-6">
+<div class="w-14 h-14 rounded-full bg-surface-container-highest flex items-center justify-center text-[#2E5BFF]">
+<span class="material-symbols-outlined text-3xl" data-icon="home_work">home_work</span>
+</div>
+<div class="text-left">
+<h3 class="text-xl font-bold text-white tracking-tight">Family Home</h3>
+<p class="text-xs text-slate-500 uppercase tracking-widest font-medium mt-1">Heritage Asset</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-slate-600 group-hover:text-[#2E5BFF] transition-colors" data-icon="chevron_right">chevron_right</span>
+</div>
+<div class="absolute inset-0 bg-gradient-to-br from-[#2E5BFF]/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</button>
+<!-- Add New Room CTA -->
+<button class="w-full mt-8 group flex items-center justify-center gap-3 py-6 rounded-xl border border-dashed border-white/10 hover:border-[#2E5BFF]/50 transition-all active:scale-95">
+<span class="material-symbols-outlined text-slate-500 group-hover:text-[#2E5BFF]" data-icon="add_circle">add_circle</span>
+<span class="text-slate-400 font-bold tracking-tight group-hover:text-white transition-colors">Add New Space</span>
+</button>
+</section>
+
+</main>
+<!-- BottomNavBar -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full bg-[#0D0D0E]/90 backdrop-blur-2xl shadow-[0_-8px_32px_rgba(0,0,0,0.5)] border-t border-white/5 z-50 rounded-t-xl">
+<div class="flex justify-around items-center px-4 pb-6 pt-3">
+<div class="flex flex-col items-center justify-center text-[#2E5BFF] bg-[#2E5BFF]/10 rounded-xl px-4 py-1 transition-all active:scale-90 duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="grid_view">grid_view</span>
+<span class="font-inter text-[10px] font-medium tracking-widest uppercase mt-1">Home</span>
+</div>
+<div class="flex flex-col items-center justify-center text-slate-500 hover:text-[#2E5BFF] transition-all active:scale-90 duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span class="font-inter text-[10px] font-medium tracking-widest uppercase mt-1">Assets</span>
+</div>
+<div class="flex flex-col items-center justify-center text-slate-500 hover:text-[#2E5BFF] transition-all active:scale-90 duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="monitoring">monitoring</span>
+<span class="font-inter text-[10px] font-medium tracking-widest uppercase mt-1">Market</span>
+</div>
+<div class="flex flex-col items-center justify-center text-slate-500 hover:text-[#2E5BFF] transition-all active:scale-90 duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-inter text-[10px] font-medium tracking-widest uppercase mt-1">Profile</span>
+</div>
+</div>
+</nav>
+</body></html>
