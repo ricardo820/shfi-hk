@@ -36,7 +36,8 @@
   - Implemented shared bottom nav in `App.tsx` for authenticated screens (all pages except login/register).
   - Style follows provided navbar UI example direction with dark glass-like footer.
   - Current items are `Home / Assets / Market / Profile`.
-  - Current active item is `Home` for the default rooms page.
+  - `Home` now always routes back to the default page (room list).
+  - `Profile` now routes to a dedicated profile page showing current user info and a logout button.
   - Login/Register screen intentionally does not render the bottom navigation.
 - **Rooms screen implemented as default logged-in page**:
   - Replaced temporary authenticated homepage with a Rooms list screen in `App.tsx`.
@@ -52,6 +53,9 @@
   - Added room-level actions:
     - `Invite by QR`: shows scannable QR for room invite code
     - `Add Transaction`: opens modal and creates transaction with `POST /rooms/:roomId/transactions`
+- **Authenticated logout path improved**:
+  - Logout is available from Profile page.
+  - Logout clears persisted token/user, resets auth state, and returns user to login/register flow.
 - **Add room flow implemented**:
   - `Add New Room` opens options: `Create New Room` or `Join Existing Room (Scan QR)`.
   - Create flow submits to `POST /rooms` and refreshes room list on success.

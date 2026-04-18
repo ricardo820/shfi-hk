@@ -55,11 +55,17 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'profile', label: 'Profile', icon: 'person' },
 ];
 
-function BottomNavBar() {
+function BottomNavBar({
+  activeKey,
+  onSelect,
+}: {
+  activeKey: NavItem['key'];
+  onSelect: (key: NavItem['key']) => void;
+}) {
   return (
     <View style={styles.bottomNavShell}>
       {NAV_ITEMS.map((item) => {
-        const isActive = item.key === 'home';
+        const isActive = item.key === activeKey;
 
         return (
           <Pressable
@@ -69,6 +75,7 @@ function BottomNavBar() {
               isActive && styles.navItemActive,
               pressed && styles.navItemPressed,
             ]}
+            onPress={() => onSelect(item.key)}
           >
             <MaterialIcons
               name={item.icon}
@@ -115,6 +122,7 @@ export default function App() {
   const [transactionItemName, setTransactionItemName] = useState('');
   const [transactionItemCount, setTransactionItemCount] = useState('1');
   const [transactionUnitPrice, setTransactionUnitPrice] = useState('0');
+  const [activeNav, setActiveNav] = useState<NavItem['key']>('home');
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -128,6 +136,7 @@ export default function App() {
           const parsedUser = JSON.parse(userValue) as User;
           setAuthToken(tokenValue);
           setAuthenticatedUser(parsedUser);
+          setActiveNav('home');
         }
       } catch {
         setAuthToken(null);
@@ -206,9 +215,46 @@ export default function App() {
   };
 
   const openRoom = async (room: Room) => {
+    setActiveNav('home');
     setOpenedRoom(room);
     setRoomDetailsStatus('');
     await fetchRoomDetails(room);
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    void Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEYS.token),
+      AsyncStorage.removeItem(STORAGE_KEYS.user),
+    ]);
+    setAuthenticatedUser(null);
+    setOpenedRoom(null);
+    setActiveNav('home');
+    setEmail('');
+    setPassword('');
+    setAuthError('');
+    setStatusMessage('');
+    setRoomDetailsError('');
+    setRoomDetailsStatus('');
+    setMode('login');
+  };
+
+  const onNavSelect = (key: NavItem['key']) => {
+    if (key === 'home') {
+      setActiveNav('home');
+      setOpenedRoom(null);
+      setRoomDetailsError('');
+      setRoomDetailsStatus('');
+      return;
+    }
+
+    if (key === 'profile') {
+      setActiveNav('profile');
+      setOpenedRoom(null);
+      return;
+    }
+
+    setActiveNav(key);
   };
 
   const submitTransaction = async () => {
@@ -438,7 +484,23 @@ export default function App() {
     return (
       <SafeAreaView style={styles.homeScreen}>
         <View style={styles.roomsContentWrap}>
-          {openedRoom ? (
+          {activeNav === 'profile' ? (
+            <View style={styles.profileWrap}>
+              <View style={styles.profileCard}>
+                <Text style={styles.profileTitle}>Profile</Text>
+                <Text style={styles.profileLabel}>Email</Text>
+                <Text style={styles.profileValue}>{authenticatedUser.email}</Text>
+                <Text style={styles.profileLabel}>User ID</Text>
+                <Text style={styles.profileValue}>{String(authenticatedUser.id)}</Text>
+                <Pressable
+                  style={({ pressed }) => [styles.modalPrimaryButton, pressed && styles.modalOptionPressed]}
+                  onPress={handleLogout}
+                >
+                  <Text style={styles.modalPrimaryText}>Log Out</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : openedRoom ? (
             <>
               <View style={styles.roomDetailsTopBar}>
                 <Pressable
@@ -815,7 +877,7 @@ export default function App() {
           </SafeAreaView>
         </Modal>
 
-        <BottomNavBar />
+        <BottomNavBar activeKey={activeNav} onSelect={onNavSelect} />
         <StatusBar style="light" />
       </SafeAreaView>
     );
@@ -1173,6 +1235,38 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     marginTop: 6,
+  },
+  profileWrap: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  profileCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#353436',
+    backgroundColor: '#1C1B1C',
+    padding: 16,
+    gap: 8,
+  },
+  profileTitle: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    marginBottom: 8,
+    letterSpacing: -0.8,
+  },
+  profileLabel: {
+    color: '#8E90A2',
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  profileValue: {
+    color: '#E5E2E3',
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 6,
   },
   roomDetailsTopBar: {
     marginBottom: 8,
