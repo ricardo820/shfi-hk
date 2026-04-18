@@ -195,10 +195,19 @@ export interface ReceiptScanResult {
   items: ReceiptScanItem[];
 }
 
+export interface VoiceReceiptResult {
+  transcript: string;
+  receipt: ReceiptScanResult;
+}
+
 const MINDEE_RECEIPT_MODEL_ID = 'ad61294e-5fe9-4309-a975-2980fa280aca'; //process.env.EXPO_PUBLIC_MINDEE_RECEIPT_MODEL_ID ?? '';
 const MINDEE_API_TOKEN = 'md__vAPz2zzXhPUYCyX2kk_W8lvH_6rOOBXUsrIMmWE0Ic';
 const MINDEE_V2_BASE_URL = 'https://api-v2.mindee.net';
 const MINDEE_DEBUG_LOGS = true;
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
+const OPENAI_API_BASE_URL = 'https://api.openai.com/v1';
+const OPENAI_TRANSCRIPTION_MODEL = 'whisper-1';
+const OPENAI_PARSE_MODEL = 'gpt-4o-mini';
 
 const mindeeLog = (message: string, extra?: unknown) => {
   if (!MINDEE_DEBUG_LOGS) {
@@ -211,6 +220,19 @@ const mindeeLog = (message: string, extra?: unknown) => {
   }
 
   console.info(`[Mindee] ${message}`, extra);
+};
+
+const openAiLog = (message: string, extra?: unknown) => {
+  if (!MINDEE_DEBUG_LOGS) {
+    return;
+  }
+
+  if (typeof extra === 'undefined') {
+    console.info(`[OpenAI] ${message}`);
+    return;
+  }
+
+  console.info(`[OpenAI] ${message}`, extra);
 };
 
 type MindeeV2Field = {
@@ -250,6 +272,18 @@ type MindeeV2Job = {
   result_url?: string;
   polling_url?: string;
   error?: MindeeErrorPayload;
+};
+
+type OpenAITranscriptionResponse = {
+  text?: string;
+};
+
+type OpenAIChatResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+  }>;
 };
 
 const isMindeeJobNotFoundError = (status: number | undefined, responseData: unknown): boolean => {
@@ -304,6 +338,16 @@ const getMindeeReceiptModelId = (): string => {
   }
 
   return modelId;
+};
+
+const getOpenAiApiKey = (): string => {
+  const apiKey = OPENAI_API_KEY.trim();
+
+  if (!apiKey) {
+    throw new Error('OpenAI API key is missing. Set EXPO_PUBLIC_OPENAI_API_KEY in .env.');
+  }
+
+  return apiKey;
 };
 
 const isNodeRuntime = (): boolean =>
@@ -618,6 +662,183 @@ const scanReceiptWithRawHttp = async (
   }
 
   throw new Error('Mindee result was not available after repeated retries.');
+};
+
+export const transcribeSpeechWithOpenAI = async (
+  audioUri: string,
+  mimeType = 'audio/m4a'
+): Promise<string> => {
+  openAiLog('Transcription start', { audioUri, mimeType });
+  const apiKey = getOpenAiApiKey();
+  const fileName = `voice.${mimeType.includes('wav') ? 'wav' : 'm4a'}`;
+
+  const formData = new FormData();
+  formData.append('model', OPENAI_TRANSCRIPTION_MODEL);
+
+  if (isNodeRuntime()) {
+    const audioResponse = await fetch(audioUri);
+    if (!audioResponse.ok) {
+      throw new Error('Unable to load voice recording for transcription.');
+    }
+
+    const audioBlob = await audioResponse.blob();
+    formData.append('file', audioBlob, fileName);
+  } else {
+    formData.append('file', {
+      uri: audioUri,
+      name: fileName,
+      type: mimeType,
+    } as unknown as Blob);
+  }
+
+  const response = await fetch(`${OPENAI_API_BASE_URL}/audio/transcriptions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: formData,
+  });
+
+  const rawBody = await response.text();
+  openAiLog('Transcription response', {
+    status: response.status,
+    ok: response.ok,
+    bodyPreview: rawBody.slice(0, 250),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI transcription failed (${response.status}): ${rawBody}`);
+  }
+
+  const parsed = rawBody ? (JSON.parse(rawBody) as OpenAITranscriptionResponse) : {};
+  const transcript = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+
+  if (!transcript) {
+    throw new Error('OpenAI transcription returned empty text.');
+  }
+
+  return transcript;
+};
+
+export const parseSpeechToReceiptWithOpenAI = async (
+  transcript: string
+): Promise<ReceiptScanResult> => {
+  openAiLog('Speech parse start');
+  const apiKey = getOpenAiApiKey();
+
+  const response = await fetch(`${OPENAI_API_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: OPENAI_PARSE_MODEL,
+      temperature: 0,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'receipt_parse',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              companyName: { type: 'string' },
+              totalAmount: { type: ['number', 'null'] },
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: 'string' },
+                    quantity: { type: 'number' },
+                    unitPrice: { type: 'number' },
+                    lineTotal: { type: ['number', 'null'] },
+                  },
+                  required: ['name', 'quantity', 'unitPrice', 'lineTotal'],
+                },
+              },
+            },
+            required: ['companyName', 'totalAmount', 'items'],
+          },
+        },
+      },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Extract receipt-like structured data from spoken text. Use quantity and unitPrice per item. If missing, set sensible defaults: quantity=1, unitPrice=0, lineTotal=null.',
+        },
+        {
+          role: 'user',
+          content: transcript,
+        },
+      ],
+    }),
+  });
+
+  const rawBody = await response.text();
+  openAiLog('Speech parse response', {
+    status: response.status,
+    ok: response.ok,
+    bodyPreview: rawBody.slice(0, 250),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI speech parse failed (${response.status}): ${rawBody}`);
+  }
+
+  const parsed = rawBody ? (JSON.parse(rawBody) as OpenAIChatResponse) : {};
+  const content = parsed.choices?.[0]?.message?.content?.trim();
+
+  if (!content) {
+    throw new Error('OpenAI speech parse returned empty content.');
+  }
+
+  const receipt = JSON.parse(content) as ReceiptScanResult;
+
+  return {
+    companyName: typeof receipt.companyName === 'string' && receipt.companyName.trim()
+      ? receipt.companyName.trim()
+      : 'Voice Entry',
+    totalAmount: typeof receipt.totalAmount === 'number' && Number.isFinite(receipt.totalAmount)
+      ? receipt.totalAmount
+      : null,
+    items: Array.isArray(receipt.items)
+      ? receipt.items
+          .map((item, index) => ({
+            name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : `Item ${index + 1}`,
+            quantity:
+              typeof item.quantity === 'number' && Number.isFinite(item.quantity)
+                ? Math.max(1, Math.round(item.quantity))
+                : 1,
+            unitPrice:
+              typeof item.unitPrice === 'number' && Number.isFinite(item.unitPrice)
+                ? Math.max(0, item.unitPrice)
+                : 0,
+            lineTotal:
+              typeof item.lineTotal === 'number' && Number.isFinite(item.lineTotal)
+                ? item.lineTotal
+                : null,
+          }))
+          .filter((item) => item.name.length > 0)
+      : [],
+  };
+};
+
+export const buildReceiptFromVoiceWithOpenAI = async (
+  audioUri: string,
+  mimeType = 'audio/m4a'
+): Promise<VoiceReceiptResult> => {
+  const transcript = await transcribeSpeechWithOpenAI(audioUri, mimeType);
+  const receipt = await parseSpeechToReceiptWithOpenAI(transcript);
+
+  return {
+    transcript,
+    receipt,
+  };
 };
 
 export const scanReceiptWithMindee = async (

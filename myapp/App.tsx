@@ -17,10 +17,12 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
+import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
+  buildReceiptFromVoiceWithOpenAI,
   createRoom,
   createRoomTransaction,
   deleteRoomTransaction,
@@ -148,8 +150,14 @@ export default function App() {
   const [isLiveReceiptScanning, setLiveReceiptScanning] = useState(false);
   const [isLiveReceiptProcessing, setLiveReceiptProcessing] = useState(false);
   const [liveReceiptStatus, setLiveReceiptStatus] = useState('');
+  const [isVoiceModalVisible, setVoiceModalVisible] = useState(false);
+  const [isVoiceRecording, setVoiceRecording] = useState(false);
+  const [isVoiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('');
+  const [voiceTranscript, setVoiceTranscript] = useState('');
   const liveReceiptCameraRef = useRef<CameraView | null>(null);
   const liveReceiptScanInFlightRef = useRef(false);
+  const voiceRecordingRef = useRef<Audio.Recording | null>(null);
 
   const getDefaultAllocations = () =>
     Object.fromEntries(roomMembers.map((member) => [String(member.user.id), '0']));
@@ -471,6 +479,119 @@ export default function App() {
     setLiveReceiptStatus('');
   };
 
+  const resetVoiceCaptureState = () => {
+    setVoiceRecording(false);
+    setVoiceProcessing(false);
+    setVoiceStatus('');
+    setVoiceTranscript('');
+  };
+
+  const openVoiceTransactionModal = () => {
+    setRoomDetailsError('');
+    setRoomDetailsStatus('');
+    resetVoiceCaptureState();
+    setVoiceStatus('Tap Start Recording and describe your receipt.');
+    setVoiceModalVisible(true);
+  };
+
+  const closeVoiceTransactionModal = () => {
+    if (isVoiceRecording || isVoiceProcessing) {
+      return;
+    }
+
+    setVoiceModalVisible(false);
+    resetVoiceCaptureState();
+  };
+
+  const startVoiceRecording = async () => {
+    if (isVoiceRecording || isVoiceProcessing) {
+      return;
+    }
+
+    try {
+      const permissionResult = await Audio.requestPermissionsAsync();
+      if (!permissionResult.granted) {
+        setVoiceStatus('Microphone permission is required for voice input.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      voiceRecordingRef.current = recording;
+      setVoiceRecording(true);
+      setVoiceStatus('Recording… Tap Stop to process your voice input.');
+      setVoiceTranscript('');
+    } catch {
+      setVoiceStatus('Unable to start recording. Please try again.');
+    }
+  };
+
+  const stopVoiceRecordingAndParse = async () => {
+    if (isVoiceProcessing) {
+      return;
+    }
+
+    const recording = voiceRecordingRef.current;
+    if (!recording) {
+      setVoiceStatus('No active recording found.');
+      return;
+    }
+
+    try {
+      setVoiceRecording(false);
+      setVoiceProcessing(true);
+      setVoiceStatus('Transcribing and parsing receipt details…');
+
+      await recording.stopAndUnloadAsync();
+      voiceRecordingRef.current = null;
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+
+      const recordingUri = recording.getURI();
+      if (!recordingUri) {
+        throw new Error('Voice recording URI is unavailable.');
+      }
+
+      const parsed = await buildReceiptFromVoiceWithOpenAI(recordingUri, 'audio/m4a');
+      const hasDetectedItems = parsed.receipt.items.length > 0;
+      const hasDetectedTotal =
+        typeof parsed.receipt.totalAmount === 'number' && parsed.receipt.totalAmount > 0;
+
+      if (!hasDetectedItems && !hasDetectedTotal) {
+        setVoiceStatus('No receipt data detected in your speech. Please try again.');
+        return;
+      }
+
+      setVoiceTranscript(parsed.transcript);
+      fillTransactionFromReceipt(parsed.receipt);
+      setRoomDetailsStatus('Voice parsed. Review parsed items and save transaction.');
+      setVoiceStatus('Parsed successfully. Opening transaction form…');
+      setVoiceModalVisible(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to process voice input.';
+      setVoiceStatus(message);
+      setRoomDetailsError('Unable to process voice input right now.');
+      voiceRecordingRef.current = null;
+    } finally {
+      setVoiceRecording(false);
+      setVoiceProcessing(false);
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+    }
+  };
+
   const scanLiveReceiptFrame = async () => {
     if (
       !isLiveReceiptScannerVisible ||
@@ -573,6 +694,16 @@ export default function App() {
       liveReceiptScanInFlightRef.current = false;
     }
   }, [isLiveReceiptScannerVisible]);
+
+  useEffect(() => {
+    return () => {
+      const recording = voiceRecordingRef.current;
+      if (recording) {
+        void recording.stopAndUnloadAsync();
+        voiceRecordingRef.current = null;
+      }
+    };
+  }, []);
 
   const updateTransactionAllocation = (itemIndex: number, userId: string, value: string) => {
     setTransactionItems((previousItems) =>
@@ -1096,6 +1227,14 @@ export default function App() {
                     <MaterialIcons name="document-scanner" size={20} color="#B8C3FF" />
                     <Text style={styles.roomActionText}>Live Receipt Scan</Text>
                   </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    onPress={openVoiceTransactionModal}
+                    disabled={roomActionLoading}
+                  >
+                    <MaterialIcons name="keyboard-voice" size={20} color="#B8C3FF" />
+                    <Text style={styles.roomActionText}>Add by Voice</Text>
+                  </Pressable>
                 </View>
 
                 {roomDetailsLoading ? (
@@ -1488,6 +1627,73 @@ export default function App() {
                 }}
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={isVoiceModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeVoiceTransactionModal}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Add Transaction by Voice</Text>
+              <Text style={styles.voiceHintText}>
+                Speak the company name, item names, quantities, and prices.
+              </Text>
+              {voiceTranscript ? (
+                <Text style={styles.voiceTranscriptText} numberOfLines={4}>
+                  Transcript: {voiceTranscript}
+                </Text>
+              ) : null}
+              <Text style={styles.voiceStatusText}>{voiceStatus}</Text>
+              {isVoiceProcessing ? (
+                <View style={styles.liveScanProcessingRow}>
+                  <ActivityIndicator color="#B8C3FF" />
+                  <Text style={styles.liveScanProcessingText}>Processing voice…</Text>
+                </View>
+              ) : null}
+              <View style={styles.voiceControlRow}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.liveScanControlButton,
+                    pressed && styles.modalOptionPressed,
+                    (isVoiceRecording || isVoiceProcessing) && styles.buttonDisabled,
+                  ]}
+                  onPress={() => {
+                    void startVoiceRecording();
+                  }}
+                  disabled={isVoiceRecording || isVoiceProcessing}
+                >
+                  <Text style={styles.liveScanControlText}>Start Recording</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.liveScanControlButton,
+                    pressed && styles.modalOptionPressed,
+                    (!isVoiceRecording || isVoiceProcessing) && styles.buttonDisabled,
+                  ]}
+                  onPress={() => {
+                    void stopVoiceRecordingAndParse();
+                  }}
+                  disabled={!isVoiceRecording || isVoiceProcessing}
+                >
+                  <Text style={styles.liveScanControlText}>Stop & Parse</Text>
+                </Pressable>
+              </View>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.modalCancelButton,
+                  pressed && styles.modalOptionPressed,
+                  (isVoiceRecording || isVoiceProcessing) && styles.buttonDisabled,
+                ]}
+                onPress={closeVoiceTransactionModal}
+                disabled={isVoiceRecording || isVoiceProcessing}
+              >
+                <Text style={styles.modalCancelText}>Close</Text>
               </Pressable>
             </View>
           </View>
@@ -2443,6 +2649,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 16,
+  },
+  voiceControlRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  voiceHintText: {
+    color: '#C4C5D9',
+    fontSize: 13,
+  },
+  voiceStatusText: {
+    color: '#B8C3FF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  voiceTranscriptText: {
+    color: '#E5E2E3',
+    fontSize: 12,
+    borderWidth: 1,
+    borderColor: '#353436',
+    borderRadius: 10,
+    backgroundColor: '#131314',
+    padding: 10,
   },
   liveScanProcessingRow: {
     marginTop: 8,

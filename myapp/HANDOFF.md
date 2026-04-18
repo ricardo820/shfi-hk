@@ -134,6 +134,20 @@
     - once a frame is captured and request is sent, live capture is frozen (no additional frame captures)
     - scanner displays inline processing status text + spinner while request is in progress
     - controls are disabled during processing, and user is prompted to restart scan on no-data/failure outcomes.
+- **Voice transaction flow implemented with OpenAI**:
+  - Added environment-based OpenAI key loading in API layer via `EXPO_PUBLIC_OPENAI_API_KEY`.
+  - Added `buildReceiptFromVoiceWithOpenAI(audioUri)` flow in `src/api.ts`:
+    - transcribes audio using OpenAI Whisper (`/v1/audio/transcriptions`, model `whisper-1`)
+    - parses transcript into strict receipt JSON using chat completions (`gpt-4o-mini` + JSON schema)
+    - normalizes parsed output into app `ReceiptScanResult` shape for transaction prefill.
+  - Added new room action button in `App.tsx`: `Add by Voice`.
+  - Added voice capture modal in `App.tsx` with:
+    - microphone permission request
+    - start/stop recording via `expo-av`
+    - inline processing spinner/status
+    - parsed transcript preview
+    - automatic prefill/open of existing Add Transaction form on successful parse.
+  - Added `.env` and `.env.example` templates and `.gitignore` entries for env file safety.
 
 ## 2. Environment Gotchas (IMPORTANT)
 Current working environment is Linux. Standard `npm`/`npx` usage is expected.
@@ -143,7 +157,8 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - **Framework**: Expo (React Native) + TypeScript
 - **Networking**: Axios instance targets `http://hack.marrb.net:3000`
 - **Receipt OCR**: Mindee Expense Receipts API (`/v1/products/mindee/expense_receipts/v5/predict`) via multipart upload
-- **Receipt OCR client**: `mindee` npm package integrated in app API layer with compatibility fallback.
+- **Receipt OCR client**: Mindee v2 enqueue/poll/result flow integrated in app API layer with runtime compatibility handling.
+- **Voice parsing**: OpenAI Whisper + structured receipt parsing in `src/api.ts`.
 - **Auth endpoints used**:
   - `POST /auth/register`
   - `POST /auth/login`
@@ -154,3 +169,4 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - Move Mindee API token out of source code into secure runtime config/env.
 - Revisit fallback path after standardizing runtime (Node/Expo target) for Mindee SDK-only operation.
 - Add API/integration tests for transaction allocation flows (`take` + `assign`) and both OCR-prefill flows (single-capture + live-scan).
+- Add input validation guardrails for parsed voice receipts (e.g., reject suspiciously large prices/counts before prefill).
