@@ -104,6 +104,11 @@
     - `takeRoomTransactionItem(roomId, transactionId, itemId, { quantity })`
     - `assignRoomTransactionItem(roomId, transactionId, itemId, { userId, quantity })`
   - Added room-related response and model interfaces.
+- **Mindee SDK integration updated**:
+  - Added `mindee@^5.1.1` npm dependency.
+  - Fixed `Unauthorized` token mismatch by moving receipt scanning to Mindee **v2** flow (token is v2-scoped).
+  - `scanReceiptWithMindee` now uses official Mindee v2 client first (`Client` + `product.Extraction`, model id `mindee/expense_receipts/v5`).
+  - Runtime fallback was also moved to Mindee v2 HTTP endpoints (`/v2/products/extraction/enqueue` + polling + result retrieval), removing v1 endpoint dependency for receipts.
 
 ## 2. Environment Gotchas (IMPORTANT)
 Current working environment is Linux. Standard `npm`/`npx` usage is expected.
@@ -113,6 +118,7 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - **Framework**: Expo (React Native) + TypeScript
 - **Networking**: Axios instance targets `http://hack.marrb.net:3000`
 - **Receipt OCR**: Mindee Expense Receipts API (`/v1/products/mindee/expense_receipts/v5/predict`) via multipart upload
+- **Receipt OCR client**: `mindee` npm package integrated in app API layer with compatibility fallback.
 - **Auth endpoints used**:
   - `POST /auth/register`
   - `POST /auth/login`
@@ -121,4 +127,5 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - Wire `Assets` and `Market` bottom-nav tabs to real screens (currently placeholders).
 - Add delete confirmation modal for transaction deletion safety.
 - Move Mindee API token out of source code into secure runtime config/env.
+- Revisit fallback path after standardizing runtime (Node/Expo target) for Mindee SDK-only operation.
 - Add API/integration tests for transaction allocation flows (`take` + `assign`) and both OCR-prefill flows (single-capture + live-scan).
