@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -17,6 +17,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
@@ -31,8 +32,10 @@ import {
   register,
   Room,
   RoomMemberEntry,
+  ReceiptScanResult,
   RoomTransaction,
   assignRoomTransactionItem,
+  scanReceiptWithMindee,
   setAuthToken,
   takeRoomTransactionItem,
   updateRoomTransaction,
@@ -141,6 +144,14 @@ export default function App() {
     },
   ]);
   const [activeNav, setActiveNav] = useState<NavItem['key']>('home');
+  const [isLiveReceiptScannerVisible, setLiveReceiptScannerVisible] = useState(false);
+  const [isLiveReceiptScanning, setLiveReceiptScanning] = useState(false);
+  const [liveReceiptStatus, setLiveReceiptStatus] = useState('');
+  const liveReceiptCameraRef = useRef<CameraView | null>(null);
+  const liveReceiptScanInFlightRef = useRef(false);
+
+  const getDefaultAllocations = () =>
+    Object.fromEntries(roomMembers.map((member) => [String(member.user.id), '0']));
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -277,9 +288,7 @@ export default function App() {
   };
 
   const resetTransactionForm = () => {
-    const defaultAllocations = Object.fromEntries(
-      roomMembers.map((member) => [String(member.user.id), '0'])
-    );
+    const defaultAllocations = getDefaultAllocations();
 
     setEditingTransaction(null);
     setTransactionCompanyName('');
@@ -339,9 +348,7 @@ export default function App() {
   };
 
   const addTransactionItemRow = () => {
-    const defaultAllocations = Object.fromEntries(
-      roomMembers.map((member) => [String(member.user.id), '0'])
-    );
+    const defaultAllocations = getDefaultAllocations();
 
     setTransactionItems((previousItems) => [
       ...previousItems,
@@ -353,6 +360,180 @@ export default function App() {
       },
     ]);
   };
+
+  const fillTransactionFromReceipt = (parsedReceipt: ReceiptScanResult) => {
+    const defaultAllocations = getDefaultAllocations();
+    const parsedItems =
+      parsedReceipt.items.length > 0
+        ? parsedReceipt.items.map((item) => ({
+            itemName: item.name,
+            itemCount: String(Math.max(1, item.quantity)),
+            unitPrice: String(item.unitPrice),
+            allocations: { ...defaultAllocations },
+          }))
+        : [
+            {
+              itemName: 'Receipt Total',
+              itemCount: '1',
+              unitPrice: String(Math.max(0, parsedReceipt.totalAmount ?? 0)),
+              allocations: { ...defaultAllocations },
+            },
+          ];
+
+    setEditingTransaction(null);
+    setTransactionCompanyName(parsedReceipt.companyName || 'Receipt');
+    setTransactionItems(parsedItems);
+    setAddTransactionModalVisible(true);
+  };
+
+  const openScanReceiptTransactionModal = async () => {
+    try {
+      setRoomActionLoading(true);
+      setRoomDetailsError('');
+      setRoomDetailsStatus('');
+
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permissionResult.granted) {
+        setRoomDetailsError('Camera permission is required to scan a receipt.');
+        return;
+      }
+
+      const captureResult = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+      });
+
+      if (captureResult.canceled || captureResult.assets.length === 0) {
+        return;
+      }
+
+      const receiptAsset = captureResult.assets[0];
+      const parsedReceipt = await scanReceiptWithMindee(
+        receiptAsset.uri,
+        receiptAsset.mimeType ?? 'image/jpeg'
+      );
+
+      fillTransactionFromReceipt(parsedReceipt);
+      setAddTransactionModalVisible(true);
+      setRoomDetailsStatus('Receipt scanned. Review parsed items and save transaction.');
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to scan receipt right now.';
+        setRoomDetailsError(message);
+      } else {
+        setRoomDetailsError('Unable to scan receipt right now.');
+      }
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const openLiveReceiptScanner = async () => {
+    setRoomDetailsError('');
+    setRoomDetailsStatus('');
+
+    if (!cameraPermission?.granted) {
+      const permissionResult = await requestCameraPermission();
+      if (!permissionResult.granted) {
+        setRoomDetailsError('Camera permission is required to scan receipt in real time.');
+        return;
+      }
+    }
+
+    setLiveReceiptStatus('Point at the receipt and press Start live scan.');
+    setLiveReceiptScanning(false);
+    setLiveReceiptScannerVisible(true);
+  };
+
+  const closeLiveReceiptScanner = () => {
+    setLiveReceiptScanning(false);
+    setLiveReceiptScannerVisible(false);
+    setLiveReceiptStatus('');
+  };
+
+  const scanLiveReceiptFrame = async () => {
+    if (!isLiveReceiptScannerVisible || !isLiveReceiptScanning || liveReceiptScanInFlightRef.current) {
+      return;
+    }
+
+    const camera = liveReceiptCameraRef.current;
+    if (!camera) {
+      return;
+    }
+
+    liveReceiptScanInFlightRef.current = true;
+
+    try {
+      setLiveReceiptStatus('Scanning receipt…');
+      const picture = await camera.takePictureAsync({
+        quality: 0.5,
+        skipProcessing: true,
+      });
+
+      if (!picture?.uri) {
+        setLiveReceiptStatus('No frame captured. Keep camera steady and try again.');
+        return;
+      }
+
+      const parsedReceipt = await scanReceiptWithMindee(picture.uri, 'image/jpeg');
+      const hasDetectedItems = parsedReceipt.items.length > 0;
+      const hasDetectedTotal = typeof parsedReceipt.totalAmount === 'number' && parsedReceipt.totalAmount > 0;
+
+      if (!hasDetectedItems && !hasDetectedTotal) {
+        setLiveReceiptStatus('No receipt data detected yet. Keep scanning…');
+        return;
+      }
+
+      fillTransactionFromReceipt(parsedReceipt);
+      setLiveReceiptStatus('Receipt detected. Transaction form pre-filled.');
+      setRoomDetailsStatus('Receipt scanned in real time. Review parsed items and save transaction.');
+      setLiveReceiptScanning(false);
+      setLiveReceiptScannerVisible(false);
+    } catch {
+      setLiveReceiptStatus('Scan failed for this frame. Continuing…');
+    } finally {
+      liveReceiptScanInFlightRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!isLiveReceiptScannerVisible || !isLiveReceiptScanning) {
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const runLoop = async () => {
+      if (cancelled) {
+        return;
+      }
+
+      await scanLiveReceiptFrame();
+
+      if (!cancelled && isLiveReceiptScannerVisible && isLiveReceiptScanning) {
+        timer = setTimeout(runLoop, 2500);
+      }
+    };
+
+    void runLoop();
+
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [isLiveReceiptScannerVisible, isLiveReceiptScanning]);
+
+  useEffect(() => {
+    if (!isLiveReceiptScannerVisible) {
+      liveReceiptScanInFlightRef.current = false;
+    }
+  }, [isLiveReceiptScannerVisible]);
 
   const updateTransactionAllocation = (itemIndex: number, userId: string, value: string) => {
     setTransactionItems((previousItems) =>
@@ -856,6 +1037,26 @@ export default function App() {
                     <MaterialIcons name="add-circle" size={20} color="#B8C3FF" />
                     <Text style={styles.roomActionText}>Add Transaction</Text>
                   </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    onPress={() => {
+                      void openScanReceiptTransactionModal();
+                    }}
+                    disabled={roomActionLoading}
+                  >
+                    <MaterialIcons name="receipt-long" size={20} color="#B8C3FF" />
+                    <Text style={styles.roomActionText}>Scan Receipt</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    onPress={() => {
+                      void openLiveReceiptScanner();
+                    }}
+                    disabled={roomActionLoading}
+                  >
+                    <MaterialIcons name="document-scanner" size={20} color="#B8C3FF" />
+                    <Text style={styles.roomActionText}>Live Receipt Scan</Text>
+                  </Pressable>
                 </View>
 
                 {roomDetailsLoading ? (
@@ -1291,6 +1492,68 @@ export default function App() {
               )}
             </View>
             <Text style={styles.scannerHint}>Point the camera at a room invite QR code.</Text>
+          </SafeAreaView>
+        </Modal>
+
+        <Modal
+          visible={isLiveReceiptScannerVisible}
+          animationType="slide"
+          onRequestClose={closeLiveReceiptScanner}
+        >
+          <SafeAreaView style={styles.scannerScreen}>
+            <View style={styles.scannerTopBar}>
+              <Text style={styles.scannerTitle}>Live Receipt Scan</Text>
+              <Pressable
+                style={({ pressed }) => [styles.scannerCloseBtn, pressed && styles.modalOptionPressed]}
+                onPress={closeLiveReceiptScanner}
+              >
+                <Text style={styles.scannerCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <View style={styles.scannerFrameWrap}>
+              {cameraPermission?.granted ?
+                (
+                  <CameraView ref={liveReceiptCameraRef} style={styles.scannerCamera} facing="back" />
+                ) : (
+                  <View style={styles.scannerPermissionFallback}>
+                    <Text style={styles.scannerHint}>
+                      Camera permission is required to scan receipts.
+                    </Text>
+                  </View>
+                )}
+            </View>
+            <Text style={styles.scannerHint}>Keep receipt fully visible and steady in frame.</Text>
+            <Text style={styles.scannerHint}>{liveReceiptStatus}</Text>
+            <View style={styles.liveScanControlRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.liveScanControlButton,
+                  pressed && styles.modalOptionPressed,
+                  isLiveReceiptScanning && styles.buttonDisabled,
+                ]}
+                onPress={() => {
+                  setLiveReceiptStatus('Live scan started…');
+                  setLiveReceiptScanning(true);
+                }}
+                disabled={isLiveReceiptScanning || !cameraPermission?.granted}
+              >
+                <Text style={styles.liveScanControlText}>Start</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.liveScanControlButton,
+                  pressed && styles.modalOptionPressed,
+                  !isLiveReceiptScanning && styles.buttonDisabled,
+                ]}
+                onPress={() => {
+                  setLiveReceiptScanning(false);
+                  setLiveReceiptStatus('Live scan stopped.');
+                }}
+                disabled={!isLiveReceiptScanning}
+              >
+                <Text style={styles.liveScanControlText}>Stop</Text>
+              </Pressable>
+            </View>
           </SafeAreaView>
         </Modal>
 
@@ -1736,11 +1999,13 @@ const styles = StyleSheet.create({
   },
   roomActionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginBottom: 12,
   },
   roomActionButton: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '31%',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#353436',
@@ -2128,5 +2393,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginTop: 14,
+  },
+  liveScanControlRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  liveScanControlButton: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: '#2E5BFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  liveScanControlText: {
+    color: '#EFEFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

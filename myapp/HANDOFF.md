@@ -53,6 +53,8 @@
   - Added room-level actions:
     - `Invite by QR`: shows scannable QR for room invite code
     - `Add Transaction`: opens modal and creates transaction with `POST /rooms/:roomId/transactions`
+    - `Scan Receipt`: opens camera, sends receipt image to Mindee OCR, and pre-fills transaction form items/company for review before save
+    - `Live Receipt Scan`: opens a live camera modal and performs periodic real-time OCR attempts until receipt data is detected, then auto-prefills transaction form
   - Members list is now an expanding/collapsing dropdown section.
   - Transactions list items are now clickable; clicking opens transaction editor modal.
   - Transaction editor supports update and deletion:
@@ -64,6 +66,16 @@
   - Allocation model supports split assignment for a single item, e.g. user U1 + user U2 + current user in the same item.
   - Transaction edit/add modal scrolling was fixed by making the modal form scrollable.
   - Validation now ensures total allocated quantity across all users for an item does not exceed item count.
+  - New transaction creation path from scanned receipt:
+    - capture receipt image with `expo-image-picker`
+    - parse receipt via Mindee Expense Receipts API
+    - map OCR line items into transaction form rows (item name, quantity, unit price)
+    - fallback to single `Receipt Total` item when OCR has no line items
+  - New real-time receipt scanning path:
+    - opens camera preview using `expo-camera`
+    - on Start, captures frames periodically and sends each frame to Mindee OCR
+    - stops automatically when parsable receipt data is found
+    - auto-opens transaction modal with prefilled company/items
   - Self-assignment is sent to backend using self-take endpoint per item:
     - `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/take`
   - Assign-to-other (one request per user allocation) is sent to backend using assign endpoint per item:
@@ -100,6 +112,7 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - **Location**: `/home/adam/shfi-hk/myapp`
 - **Framework**: Expo (React Native) + TypeScript
 - **Networking**: Axios instance targets `http://hack.marrb.net:3000`
+- **Receipt OCR**: Mindee Expense Receipts API (`/v1/products/mindee/expense_receipts/v5/predict`) via multipart upload
 - **Auth endpoints used**:
   - `POST /auth/register`
   - `POST /auth/login`
@@ -107,4 +120,5 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 ## 4. Next Steps
 - Wire `Assets` and `Market` bottom-nav tabs to real screens (currently placeholders).
 - Add delete confirmation modal for transaction deletion safety.
-- Add API/integration tests for transaction allocation flows (`take` + `assign`).
+- Move Mindee API token out of source code into secure runtime config/env.
+- Add API/integration tests for transaction allocation flows (`take` + `assign`) and both OCR-prefill flows (single-capture + live-scan).

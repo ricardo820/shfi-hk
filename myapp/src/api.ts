@@ -182,6 +182,122 @@ export interface AssignItemResponse {
   message?: string;
 }
 
+export interface ReceiptScanItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number | null;
+}
+
+export interface ReceiptScanResult {
+  companyName: string;
+  totalAmount: number | null;
+  items: ReceiptScanItem[];
+}
+
+const MINDEE_RECEIPT_PREDICT_URL =
+  'https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict';
+const MINDEE_API_TOKEN = 'md__vAPz2zzXhPUYCyX2kk_W8lvH_6rOOBXUsrIMmWE0Ic';
+
+const parseNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalizedValue = value.trim().replace(',', '.');
+    const parsedValue = Number(normalizedValue);
+    return Number.isFinite(parsedValue) ? parsedValue : null;
+  }
+
+  return null;
+};
+
+const parseFieldValue = (field: unknown): unknown => {
+  if (!field || typeof field !== 'object') {
+    return field;
+  }
+
+  if ('value' in field) {
+    return (field as { value: unknown }).value;
+  }
+
+  return field;
+};
+
+const toPositiveInt = (value: number | null, fallback = 1): number => {
+  if (value === null) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.round(value));
+};
+
+export const scanReceiptWithMindee = async (
+  imageUri: string,
+  mimeType = 'image/jpeg'
+): Promise<ReceiptScanResult> => {
+  const formData = new FormData();
+  formData.append('document', {
+    uri: imageUri,
+    name: `receipt.${mimeType.includes('png') ? 'png' : 'jpg'}`,
+    type: mimeType,
+  } as unknown as Blob);
+
+  const response = await axios.post(MINDEE_RECEIPT_PREDICT_URL, formData, {
+    headers: {
+      Authorization: `Token ${MINDEE_API_TOKEN}`,
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 25000,
+  });
+
+  const prediction =
+    (response.data as { document?: { inference?: { prediction?: Record<string, unknown> } } }).document
+      ?.inference?.prediction ?? {};
+
+  const supplierName = parseFieldValue(prediction.supplier_name);
+  const companyName = typeof supplierName === 'string' && supplierName.trim().length > 0
+    ? supplierName.trim()
+    : 'Receipt';
+
+  const totalAmount = parseNumber(parseFieldValue(prediction.total_amount));
+
+  const rawLineItems = Array.isArray(prediction.line_items)
+    ? (prediction.line_items as Array<Record<string, unknown>>)
+    : [];
+
+  const items: ReceiptScanItem[] = rawLineItems
+    .map((lineItem, index) => {
+      const parsedName = parseFieldValue(lineItem.description) ?? parseFieldValue(lineItem.product_name);
+      const parsedQuantity = parseNumber(parseFieldValue(lineItem.quantity));
+      const parsedUnitPrice = parseNumber(parseFieldValue(lineItem.unit_price));
+      const parsedLineTotal = parseNumber(parseFieldValue(lineItem.total_amount));
+
+      const quantity = toPositiveInt(parsedQuantity, 1);
+      const unitPrice =
+        parsedUnitPrice ??
+        (parsedLineTotal !== null && quantity > 0 ? parsedLineTotal / quantity : 0);
+
+      return {
+        name:
+          typeof parsedName === 'string' && parsedName.trim().length > 0
+            ? parsedName.trim()
+            : `Item ${index + 1}`,
+        quantity,
+        unitPrice: Math.max(0, unitPrice),
+        lineTotal: parsedLineTotal,
+      };
+    })
+    .filter((item) => item.name.length > 0);
+
+  return {
+    companyName,
+    totalAmount,
+    items,
+  };
+};
+
 export const register = async (payload: AuthRequest): Promise<RegisterResponse> => {
   const response = await api.post<RegisterResponse>('/auth/register', payload);
   return response.data;
