@@ -195,9 +195,23 @@ export interface ReceiptScanResult {
   items: ReceiptScanItem[];
 }
 
-const MINDEE_V2_BASE_URL = 'https://api-v2.mindee.net';
-const MINDEE_RECEIPT_MODEL_ID = 'mindee/expense_receipts/v5';
+const MINDEE_RECEIPT_MODEL_ID = 'ad61294e-5fe9-4309-a975-2980fa280aca'; //process.env.EXPO_PUBLIC_MINDEE_RECEIPT_MODEL_ID ?? '';
 const MINDEE_API_TOKEN = 'md__vAPz2zzXhPUYCyX2kk_W8lvH_6rOOBXUsrIMmWE0Ic';
+const MINDEE_V2_BASE_URL = 'https://api-v2.mindee.net';
+const MINDEE_DEBUG_LOGS = true;
+
+const mindeeLog = (message: string, extra?: unknown) => {
+  if (!MINDEE_DEBUG_LOGS) {
+    return;
+  }
+
+  if (typeof extra === 'undefined') {
+    console.info(`[Mindee] ${message}`);
+    return;
+  }
+
+  console.info(`[Mindee] ${message}`, extra);
+};
 
 type MindeeV2Field = {
   value?: unknown;
@@ -212,6 +226,7 @@ type MindeeV2ExtractionResponse = {
     };
   };
   job?: {
+    id?: string;
     status?: string;
     result_url?: string;
     polling_url?: string;
@@ -221,6 +236,37 @@ type MindeeV2ExtractionResponse = {
       code?: string;
     };
   };
+};
+
+type MindeeErrorPayload = {
+  code?: string;
+  detail?: string;
+  title?: string;
+};
+
+type MindeeV2Job = {
+  id?: string;
+  status?: string;
+  result_url?: string;
+  polling_url?: string;
+  error?: MindeeErrorPayload;
+};
+
+const isMindeeJobNotFoundError = (status: number | undefined, responseData: unknown): boolean => {
+  if (status !== 404) {
+    return false;
+  }
+
+  if (typeof responseData === 'string') {
+    return responseData.includes('404-009') || responseData.includes('Job with ID');
+  }
+
+  if (!responseData || typeof responseData !== 'object') {
+    return false;
+  }
+
+  const payload = responseData as MindeeErrorPayload;
+  return payload.code === '404-009' || String(payload.detail ?? '').includes('Job with ID');
 };
 
 const parseNumber = (value: unknown): number | null => {
@@ -244,6 +290,26 @@ const toPositiveInt = (value: number | null, fallback = 1): number => {
 
   return Math.max(1, Math.round(value));
 };
+
+const isUuid = (value: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+const getMindeeReceiptModelId = (): string => {
+  const modelId = MINDEE_RECEIPT_MODEL_ID.trim();
+
+  if (!modelId || !isUuid(modelId)) {
+    throw new Error(
+      'Mindee v2 requires a UUID model ID. Set EXPO_PUBLIC_MINDEE_RECEIPT_MODEL_ID to your extraction model UUID.'
+    );
+  }
+
+  return modelId;
+};
+
+const isNodeRuntime = (): boolean =>
+  typeof process !== 'undefined' &&
+  typeof process.versions?.node === 'string' &&
+  typeof window === 'undefined';
 
 const readV2SimpleFieldValue = (fields: Record<string, MindeeV2Field>, key: string): unknown => {
   const field = fields[key];
@@ -333,6 +399,9 @@ const scanReceiptWithMindeeClient = async (
   imageUri: string,
   mimeType: string
 ): Promise<ReceiptScanResult> => {
+  mindeeLog('SDK scan start', { imageUri, mimeType });
+  const modelId = getMindeeReceiptModelId();
+
   const dynamicImporter = new Function('moduleName', 'return import(moduleName);') as (
     moduleName: string
   ) => Promise<{
@@ -352,14 +421,6 @@ const scanReceiptWithMindeeClient = async (
       Extraction: unknown;
     };
     BytesInput: new (options: { inputBytes: Uint8Array; filename: string }) => unknown;
-    v1: {
-      Client: new (options: { apiKey: string }) => {
-        parse: (
-          productClass: unknown,
-          inputSource: unknown
-        ) => Promise<unknown>;
-      };
-    };
   }>;
 
   const mindee = await dynamicImporter('mindee');
@@ -379,7 +440,7 @@ const scanReceiptWithMindeeClient = async (
     mindee.product.Extraction,
     inputSource,
     {
-      modelId: MINDEE_RECEIPT_MODEL_ID,
+      modelId,
     },
     {
       initialDelaySec: 1,
@@ -393,6 +454,8 @@ const scanReceiptWithMindeeClient = async (
       ? result.getRawHttp()
       : ((result as unknown as MindeeV2ExtractionResponse) ?? {});
 
+  mindeeLog('SDK scan completed');
+
   return mapV2ResponseToReceiptResult(rawResponse);
 };
 
@@ -400,79 +463,180 @@ const scanReceiptWithRawHttp = async (
   imageUri: string,
   mimeType: string
 ): Promise<ReceiptScanResult> => {
+  mindeeLog('HTTP scan start', { imageUri, mimeType });
+  const modelId = getMindeeReceiptModelId();
+
+  const imageResponse = await fetch(imageUri);
+  if (!imageResponse.ok) {
+    throw new Error('Unable to load receipt image for scanning.');
+  }
+
+  const imageBlob = await imageResponse.blob();
+  const fileName = `receipt.${mimeType.includes('png') ? 'png' : 'jpg'}`;
+
   const formData = new FormData();
-  formData.append('model_id', MINDEE_RECEIPT_MODEL_ID);
-  formData.append('file', {
-    uri: imageUri,
-    name: `receipt.${mimeType.includes('png') ? 'png' : 'jpg'}`,
-    type: mimeType,
-  } as unknown as Blob);
+  formData.append('model_id', modelId);
+  formData.append('file', imageBlob, fileName);
 
-  const enqueueResponse = await axios.post<MindeeV2ExtractionResponse>(
-    `${MINDEE_V2_BASE_URL}/v2/products/extraction/enqueue`,
-    formData,
-    {
-      headers: {
-        Authorization: MINDEE_API_TOKEN,
-        'Content-Type': 'multipart/form-data',
-      },
-      timeout: 25000,
-    }
-  );
+  const parseMindeeJsonResponse = async <T>(response: Response): Promise<T> => {
+    const rawBody = await response.text();
+    let parsedBody = {} as T;
 
-  let resultUrl = enqueueResponse.data.job?.result_url;
-  let pollingUrl = enqueueResponse.data.job?.polling_url;
-
-  for (let attempt = 0; attempt < 45 && !resultUrl; attempt += 1) {
-    if (!pollingUrl) {
-      break;
+    if (rawBody) {
+      try {
+        parsedBody = JSON.parse(rawBody) as T;
+      } catch (error) {
+        mindeeLog('Failed to parse Mindee JSON body', {
+          status: response.status,
+          rawBody,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     }
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1000);
+    mindeeLog('Mindee HTTP response received', {
+      status: response.status,
+      ok: response.ok,
+      bodyPreview: rawBody.slice(0, 250),
     });
 
-    const pollResponse = await axios.get<MindeeV2ExtractionResponse>(resolveMindeeV2Url(pollingUrl), {
-      headers: {
-        Authorization: MINDEE_API_TOKEN,
-      },
-      timeout: 25000,
-    });
-
-    if (pollResponse.data.job?.error) {
-      throw new Error(
-        pollResponse.data.job.error.detail ||
-          pollResponse.data.job.error.title ||
-          'Mindee failed to process this receipt.'
-      );
+    if (!response.ok) {
+      throw new Error(`Mindee request failed (${response.status}): ${rawBody}`);
     }
 
-    resultUrl = pollResponse.data.job?.result_url ?? resultUrl;
-    pollingUrl = pollResponse.data.job?.polling_url ?? pollingUrl;
-  }
+    return parsedBody;
+  };
 
-  if (!resultUrl) {
-    throw new Error('Mindee did not return a result URL for receipt extraction.');
-  }
-
-  const resultResponse = await axios.get<MindeeV2ExtractionResponse>(resolveMindeeV2Url(resultUrl), {
+  const enqueueResponse = await fetch(`${MINDEE_V2_BASE_URL}/v2/products/extraction/enqueue`, {
+    method: 'POST',
     headers: {
       Authorization: MINDEE_API_TOKEN,
     },
-    timeout: 25000,
+    body: formData,
   });
 
-  return mapV2ResponseToReceiptResult(resultResponse.data);
+  const enqueueData = await parseMindeeJsonResponse<MindeeV2ExtractionResponse>(enqueueResponse);
+  const initialJob: MindeeV2Job = enqueueData.job ?? {};
+  mindeeLog('Enqueue response parsed', {
+    jobId: initialJob.id,
+    status: initialJob.status,
+    pollingUrl: initialJob.polling_url,
+    resultUrl: initialJob.result_url,
+  });
+
+  if (!initialJob.polling_url && !initialJob.id) {
+    throw new Error('Mindee enqueue response did not include job polling information.');
+  }
+
+  const fallbackPollingUrl = initialJob.id ? `${MINDEE_V2_BASE_URL}/v2/jobs/${initialJob.id}` : '';
+  const pollingBaseUrl = resolveMindeeV2Url(initialJob.polling_url ?? fallbackPollingUrl);
+  const pollUrl = pollingBaseUrl.includes('?')
+    ? `${pollingBaseUrl}&redirect=false`
+    : `${pollingBaseUrl}?redirect=false`;
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, attempt === 0 ? 3000 : 2000);
+    });
+
+    const pollResponse = await fetch(pollUrl, {
+      headers: {
+        Authorization: MINDEE_API_TOKEN,
+      },
+    });
+
+    if (!pollResponse.ok) {
+      const rawBody = await pollResponse.text();
+      mindeeLog('Polling non-ok response', {
+        attempt,
+        status: pollResponse.status,
+        rawBody,
+      });
+      const isTransientJobNotFound = isMindeeJobNotFoundError(pollResponse.status, rawBody);
+
+      if (isTransientJobNotFound) {
+        continue;
+      }
+
+      throw new Error(`Mindee polling failed (${pollResponse.status}): ${rawBody}`);
+    }
+
+    const pollData = (await pollResponse.json()) as MindeeV2ExtractionResponse;
+    const polledJob = pollData.job;
+
+    mindeeLog('Polling tick', {
+      attempt,
+      jobStatus: polledJob?.status,
+      hasResultUrl: Boolean(polledJob?.result_url),
+    });
+
+    if (!polledJob) {
+      continue;
+    }
+
+    if (polledJob.error) {
+      throw new Error(
+        polledJob.error.detail || polledJob.error.title || 'Mindee failed to process this receipt.'
+      );
+    }
+
+    if (polledJob.status === 'Failed') {
+      throw new Error('Mindee job failed without error details.');
+    }
+
+    if (polledJob.status === 'Processed' && polledJob.result_url) {
+      mindeeLog('Job processed, fetching result', { resultUrl: polledJob.result_url });
+      const resultResponse = await fetch(resolveMindeeV2Url(polledJob.result_url), {
+        headers: {
+          Authorization: MINDEE_API_TOKEN,
+        },
+      });
+
+      const resultData = await parseMindeeJsonResponse<MindeeV2ExtractionResponse>(resultResponse);
+      mindeeLog('Result fetched successfully');
+      return mapV2ResponseToReceiptResult(resultData);
+    }
+  }
+
+  throw new Error('Mindee result was not available after repeated retries.');
 };
 
 export const scanReceiptWithMindee = async (
   imageUri: string,
   mimeType = 'image/jpeg'
 ): Promise<ReceiptScanResult> => {
+  mindeeLog('scanReceiptWithMindee invoked', {
+    runtime: isNodeRuntime() ? 'node' : 'client',
+    mimeType,
+  });
+
+  if (!isNodeRuntime()) {
+    const result = await scanReceiptWithRawHttp(imageUri, mimeType);
+    mindeeLog('scanReceiptWithMindee completed via HTTP path', {
+      companyName: result.companyName,
+      itemCount: result.items.length,
+    });
+    return result;
+  }
+
   try {
-    return await scanReceiptWithMindeeClient(imageUri, mimeType);
-  } catch {
-    return scanReceiptWithRawHttp(imageUri, mimeType);
+    const result = await scanReceiptWithMindeeClient(imageUri, mimeType);
+    mindeeLog('scanReceiptWithMindee completed via SDK path', {
+      companyName: result.companyName,
+      itemCount: result.items.length,
+    });
+    return result;
+  } catch (error) {
+    mindeeLog('SDK path failed, falling back to HTTP', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    const result = await scanReceiptWithRawHttp(imageUri, mimeType);
+    mindeeLog('scanReceiptWithMindee completed via HTTP fallback', {
+      companyName: result.companyName,
+      itemCount: result.items.length,
+    });
+    return result;
   }
 };
 

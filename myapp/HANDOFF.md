@@ -108,7 +108,24 @@
   - Added `mindee@^5.1.1` npm dependency.
   - Fixed `Unauthorized` token mismatch by moving receipt scanning to Mindee **v2** flow (token is v2-scoped).
   - `scanReceiptWithMindee` now uses official Mindee v2 client first (`Client` + `product.Extraction`, model id `mindee/expense_receipts/v5`).
-  - Runtime fallback was also moved to Mindee v2 HTTP endpoints (`/v2/products/extraction/enqueue` + polling + result retrieval), removing v1 endpoint dependency for receipts.
+  - Integration is now strictly SDK-based per docs (`Client` config + `BytesInput` source loading + `enqueueAndGetResult`), and manual HTTP enqueue/polling fallback was removed.
+  - Current model id used in code is UUID-based (v2 requirement).
+  - Added explicit UI-side console logging for receipt scan failures (single scan + live scan), including Axios status/payload when available, to simplify debugging from device logs.
+  - Runtime fix: Expo/client runtimes now use Mindee v2 HTTP flow directly (enqueue + poll + result) to avoid bare-specifier import failure for `mindee` package in client bundle.
+  - Node runtime keeps SDK path (`mindee.Client` + `BytesInput`) and falls back to HTTP if SDK invocation fails.
+  - Polling resilience fix: client polling now falls back to `/v2/jobs/:id` when `polling_url` is absent and retries transient `404-009 Job not found` responses during early job propagation.
+  - Further retry hardening:
+    - poll loop now uses doc-aligned delays (longer first delay, then paced retries)
+    - transient `404-009` detection now handles both object and string error payloads
+    - result URL fetch also retries transient `404-009` before failing.
+  - Receipt polling flow is now aligned with `mindee_ref.ts`:
+    - uses `fetch` for enqueue/poll/result (instead of axios)
+    - polls using `polling_url` with `?redirect=false`
+    - waits for `job.status === "Processed"` before fetching `result_url`
+    - surfaces non-OK responses with full raw body for easier debugging.
+  - Added verbose tracing logs for receipt scan path:
+    - UI logs for scan start/completion (single + live)
+    - API logs for invocation/runtime path, enqueue response, polling ticks/status, non-OK poll responses, result fetch, and completion.
 
 ## 2. Environment Gotchas (IMPORTANT)
 Current working environment is Linux. Standard `npm`/`npx` usage is expected.

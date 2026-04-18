@@ -388,6 +388,7 @@ export default function App() {
 
   const openScanReceiptTransactionModal = async () => {
     try {
+      console.info('[ReceiptScan] Single scan started');
       setRoomActionLoading(true);
       setRoomDetailsError('');
       setRoomDetailsStatus('');
@@ -413,10 +414,23 @@ export default function App() {
         receiptAsset.mimeType ?? 'image/jpeg'
       );
 
+      console.info('[ReceiptScan] Single scan completed', {
+        companyName: parsedReceipt.companyName,
+        itemCount: parsedReceipt.items.length,
+        totalAmount: parsedReceipt.totalAmount,
+      });
+
       fillTransactionFromReceipt(parsedReceipt);
       setAddTransactionModalVisible(true);
       setRoomDetailsStatus('Receipt scanned. Review parsed items and save transaction.');
     } catch (error) {
+      console.error('[ReceiptScan] Single scan failed', {
+        isAxiosError: axios.isAxiosError(error),
+        message: error instanceof Error ? error.message : String(error),
+        axiosStatus: axios.isAxiosError(error) ? error.response?.status : undefined,
+        axiosData: axios.isAxiosError(error) ? error.response?.data : undefined,
+      });
+
       if (axios.isAxiosError(error)) {
         const message =
           typeof error.response?.data?.message === 'string'
@@ -467,6 +481,7 @@ export default function App() {
     liveReceiptScanInFlightRef.current = true;
 
     try {
+      console.info('[ReceiptScan] Live frame scan started');
       setLiveReceiptStatus('Scanning receipt…');
       const picture = await camera.takePictureAsync({
         quality: 0.5,
@@ -479,6 +494,11 @@ export default function App() {
       }
 
       const parsedReceipt = await scanReceiptWithMindee(picture.uri, 'image/jpeg');
+      console.info('[ReceiptScan] Live frame scan completed', {
+        companyName: parsedReceipt.companyName,
+        itemCount: parsedReceipt.items.length,
+        totalAmount: parsedReceipt.totalAmount,
+      });
       const hasDetectedItems = parsedReceipt.items.length > 0;
       const hasDetectedTotal = typeof parsedReceipt.totalAmount === 'number' && parsedReceipt.totalAmount > 0;
 
@@ -492,7 +512,13 @@ export default function App() {
       setRoomDetailsStatus('Receipt scanned in real time. Review parsed items and save transaction.');
       setLiveReceiptScanning(false);
       setLiveReceiptScannerVisible(false);
-    } catch {
+    } catch (error) {
+      console.error('[ReceiptScan] Live frame scan failed', {
+        isAxiosError: axios.isAxiosError(error),
+        message: error instanceof Error ? error.message : String(error),
+        axiosStatus: axios.isAxiosError(error) ? error.response?.status : undefined,
+        axiosData: axios.isAxiosError(error) ? error.response?.data : undefined,
+      });
       setLiveReceiptStatus('Scan failed for this frame. Continuing…');
     } finally {
       liveReceiptScanInFlightRef.current = false;
