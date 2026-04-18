@@ -130,6 +130,10 @@
     - client runtime no longer does `fetch(file://...)` to create a Blob (can throw `Network request failed` on device)
     - now sends receipt file using React Native FormData file object `{ uri, name, type }`.
   - Added explicit log for enqueue network failures with image URI + mime type context.
+  - Live scan UX update:
+    - once a frame is captured and request is sent, live capture is frozen (no additional frame captures)
+    - scanner displays inline processing status text + spinner while request is in progress
+    - controls are disabled during processing, and user is prompted to restart scan on no-data/failure outcomes.
 
 ## 2. Environment Gotchas (IMPORTANT)
 Current working environment is Linux. Standard `npm`/`npx` usage is expected.

@@ -146,6 +146,7 @@ export default function App() {
   const [activeNav, setActiveNav] = useState<NavItem['key']>('home');
   const [isLiveReceiptScannerVisible, setLiveReceiptScannerVisible] = useState(false);
   const [isLiveReceiptScanning, setLiveReceiptScanning] = useState(false);
+  const [isLiveReceiptProcessing, setLiveReceiptProcessing] = useState(false);
   const [liveReceiptStatus, setLiveReceiptStatus] = useState('');
   const liveReceiptCameraRef = useRef<CameraView | null>(null);
   const liveReceiptScanInFlightRef = useRef(false);
@@ -459,17 +460,24 @@ export default function App() {
 
     setLiveReceiptStatus('Point at the receipt and press Start live scan.');
     setLiveReceiptScanning(false);
+    setLiveReceiptProcessing(false);
     setLiveReceiptScannerVisible(true);
   };
 
   const closeLiveReceiptScanner = () => {
     setLiveReceiptScanning(false);
+    setLiveReceiptProcessing(false);
     setLiveReceiptScannerVisible(false);
     setLiveReceiptStatus('');
   };
 
   const scanLiveReceiptFrame = async () => {
-    if (!isLiveReceiptScannerVisible || !isLiveReceiptScanning || liveReceiptScanInFlightRef.current) {
+    if (
+      !isLiveReceiptScannerVisible ||
+      !isLiveReceiptScanning ||
+      isLiveReceiptProcessing ||
+      liveReceiptScanInFlightRef.current
+    ) {
       return;
     }
 
@@ -493,6 +501,10 @@ export default function App() {
         return;
       }
 
+      setLiveReceiptScanning(false);
+      setLiveReceiptProcessing(true);
+      setLiveReceiptStatus('Receipt captured. Processing…');
+
       const parsedReceipt = await scanReceiptWithMindee(picture.uri, 'image/jpeg');
       console.info('[ReceiptScan] Live frame scan completed', {
         companyName: parsedReceipt.companyName,
@@ -503,7 +515,7 @@ export default function App() {
       const hasDetectedTotal = typeof parsedReceipt.totalAmount === 'number' && parsedReceipt.totalAmount > 0;
 
       if (!hasDetectedItems && !hasDetectedTotal) {
-        setLiveReceiptStatus('No receipt data detected yet. Keep scanning…');
+        setLiveReceiptStatus('No receipt data detected. Press Start to scan again.');
         return;
       }
 
@@ -519,8 +531,9 @@ export default function App() {
         axiosStatus: axios.isAxiosError(error) ? error.response?.status : undefined,
         axiosData: axios.isAxiosError(error) ? error.response?.data : undefined,
       });
-      setLiveReceiptStatus('Scan failed for this frame. Continuing…');
+      setLiveReceiptStatus('Processing failed. Press Start to scan again.');
     } finally {
+      setLiveReceiptProcessing(false);
       liveReceiptScanInFlightRef.current = false;
     }
   };
@@ -1550,18 +1563,24 @@ export default function App() {
             </View>
             <Text style={styles.scannerHint}>Keep receipt fully visible and steady in frame.</Text>
             <Text style={styles.scannerHint}>{liveReceiptStatus}</Text>
+            {isLiveReceiptProcessing ? (
+              <View style={styles.liveScanProcessingRow}>
+                <ActivityIndicator color="#B8C3FF" />
+                <Text style={styles.liveScanProcessingText}>Processing receipt…</Text>
+              </View>
+            ) : null}
             <View style={styles.liveScanControlRow}>
               <Pressable
                 style={({ pressed }) => [
                   styles.liveScanControlButton,
                   pressed && styles.modalOptionPressed,
-                  isLiveReceiptScanning && styles.buttonDisabled,
+                  (isLiveReceiptScanning || isLiveReceiptProcessing) && styles.buttonDisabled,
                 ]}
                 onPress={() => {
                   setLiveReceiptStatus('Live scan started…');
                   setLiveReceiptScanning(true);
                 }}
-                disabled={isLiveReceiptScanning || !cameraPermission?.granted}
+                disabled={isLiveReceiptScanning || isLiveReceiptProcessing || !cameraPermission?.granted}
               >
                 <Text style={styles.liveScanControlText}>Start</Text>
               </Pressable>
@@ -1569,13 +1588,13 @@ export default function App() {
                 style={({ pressed }) => [
                   styles.liveScanControlButton,
                   pressed && styles.modalOptionPressed,
-                  !isLiveReceiptScanning && styles.buttonDisabled,
+                  (!isLiveReceiptScanning || isLiveReceiptProcessing) && styles.buttonDisabled,
                 ]}
                 onPress={() => {
                   setLiveReceiptScanning(false);
                   setLiveReceiptStatus('Live scan stopped.');
                 }}
-                disabled={!isLiveReceiptScanning}
+                disabled={!isLiveReceiptScanning || isLiveReceiptProcessing}
               >
                 <Text style={styles.liveScanControlText}>Stop</Text>
               </Pressable>
@@ -2424,6 +2443,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 16,
+  },
+  liveScanProcessingRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  liveScanProcessingText: {
+    color: '#B8C3FF',
+    fontSize: 13,
+    fontWeight: '600',
   },
   liveScanControlButton: {
     flex: 1,
