@@ -53,6 +53,24 @@
   - Added room-level actions:
     - `Invite by QR`: shows scannable QR for room invite code
     - `Add Transaction`: opens modal and creates transaction with `POST /rooms/:roomId/transactions`
+  - Members list is now an expanding/collapsing dropdown section.
+  - Transactions list items are now clickable; clicking opens transaction editor modal.
+  - Transaction editor supports update and deletion:
+    - update via `PATCH /rooms/:roomId/transactions/:transactionId`
+    - delete via `DELETE /rooms/:roomId/transactions/:transactionId`
+  - Transaction create/edit supports multiple items in one transaction payload.
+  - Transaction create/edit now supports per-item multi-user allocation quantities (including self).
+  - Edit modal now pre-fills existing taken quantities from transaction item `takenBy` data for all room members.
+  - Allocation model supports split assignment for a single item, e.g. user U1 + user U2 + current user in the same item.
+  - Transaction edit/add modal scrolling was fixed by making the modal form scrollable.
+  - Validation now ensures total allocated quantity across all users for an item does not exceed item count.
+  - Self-assignment is sent to backend using self-take endpoint per item:
+    - `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/take`
+  - Assign-to-other (one request per user allocation) is sent to backend using assign endpoint per item:
+    - `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/assign`
+  - Room detail now displays computed user debt summary with formula:
+    - `userDebt = (communalDebt / memberCount) + personalAssignedDebt`
+    - communal debt comes from unassigned item remainder.
 - **Authenticated logout path improved**:
   - Logout is available from Profile page.
   - Logout clears persisted token/user, resets auth state, and returns user to login/register flow.
@@ -69,6 +87,10 @@
     - `listRoomMembers(roomId)`
     - `listRoomTransactions(roomId)`
     - `createRoomTransaction(roomId, payload)`
+    - `updateRoomTransaction(roomId, transactionId, payload)`
+    - `deleteRoomTransaction(roomId, transactionId)`
+    - `takeRoomTransactionItem(roomId, transactionId, itemId, { quantity })`
+    - `assignRoomTransactionItem(roomId, transactionId, itemId, { userId, quantity })`
   - Added room-related response and model interfaces.
 
 ## 2. Environment Gotchas (IMPORTANT)
@@ -83,6 +105,6 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
   - `POST /auth/login`
 
 ## 4. Next Steps
-- Connect bottom-nav items to routed screens with real navigation state.
-- Add dedicated room detail screen and wire room-card clicks to that page.
-- Add API tests and integration checks for auth flow.
+- Wire `Assets` and `Market` bottom-nav tabs to real screens (currently placeholders).
+- Add delete confirmation modal for transaction deletion safety.
+- Add API/integration tests for transaction allocation flows (`take` + `assign`).

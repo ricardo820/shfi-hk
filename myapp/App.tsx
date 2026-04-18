@@ -22,6 +22,7 @@ import axios from 'axios';
 import {
   createRoom,
   createRoomTransaction,
+  deleteRoomTransaction,
   joinRoom,
   listRoomMembers,
   listRooms,
@@ -31,11 +32,21 @@ import {
   Room,
   RoomMemberEntry,
   RoomTransaction,
+  assignRoomTransactionItem,
   setAuthToken,
+  takeRoomTransactionItem,
+  updateRoomTransaction,
   User,
 } from './src/api';
 
 type AuthMode = 'login' | 'register';
+
+type TransactionFormItem = {
+  itemName: string;
+  itemCount: string;
+  unitPrice: string;
+  allocations: Record<string, string>;
+};
 
 const STORAGE_KEYS = {
   token: 'auth_token',
@@ -116,12 +127,19 @@ export default function App() {
   const [roomDetailsLoading, setRoomDetailsLoading] = useState(false);
   const [roomDetailsError, setRoomDetailsError] = useState('');
   const [roomDetailsStatus, setRoomDetailsStatus] = useState('');
+  const [membersExpanded, setMembersExpanded] = useState(false);
   const [isInviteModalVisible, setInviteModalVisible] = useState(false);
   const [isAddTransactionModalVisible, setAddTransactionModalVisible] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<RoomTransaction | null>(null);
   const [transactionCompanyName, setTransactionCompanyName] = useState('');
-  const [transactionItemName, setTransactionItemName] = useState('');
-  const [transactionItemCount, setTransactionItemCount] = useState('1');
-  const [transactionUnitPrice, setTransactionUnitPrice] = useState('0');
+  const [transactionItems, setTransactionItems] = useState<TransactionFormItem[]>([
+    {
+      itemName: '',
+      itemCount: '1',
+      unitPrice: '0',
+      allocations: {},
+    },
+  ]);
   const [activeNav, setActiveNav] = useState<NavItem['key']>('home');
 
   useEffect(() => {
@@ -198,6 +216,7 @@ export default function App() {
         listRoomTransactions(room.id),
       ]);
       setRoomMembers(membersResponse.members ?? []);
+      setMembersExpanded(false);
       setRoomTransactions(transactionsResponse.transactions ?? []);
     } catch (error) {
       if (axios.isAxiosError(error)) {
@@ -257,56 +276,334 @@ export default function App() {
     setActiveNav(key);
   };
 
+  const resetTransactionForm = () => {
+    const defaultAllocations = Object.fromEntries(
+      roomMembers.map((member) => [String(member.user.id), '0'])
+    );
+
+    setEditingTransaction(null);
+    setTransactionCompanyName('');
+    setTransactionItems([
+      {
+        itemName: '',
+        itemCount: '1',
+        unitPrice: '0',
+        allocations: defaultAllocations,
+      },
+    ]);
+  };
+
+  const openCreateTransactionModal = () => {
+    resetTransactionForm();
+    setAddTransactionModalVisible(true);
+  };
+
+  const openEditTransactionModal = (transaction: RoomTransaction) => {
+    const allMemberIds = roomMembers.map((member) => String(member.user.id));
+
+    setEditingTransaction(transaction);
+    setTransactionCompanyName(transaction.companyName);
+    setTransactionItems(
+      transaction.items.map((item) => ({
+        itemName: item.itemName,
+        itemCount: String(item.itemCount),
+        unitPrice: String(item.unitPrice),
+        allocations: allMemberIds.reduce<Record<string, string>>((accumulator, memberId) => {
+          const assignedQuantity = (item.taken?.takenBy ?? [])
+            .filter((entry) => String(entry.userId) === memberId)
+            .reduce((sum, entry) => sum + entry.quantity, 0);
+
+          accumulator[memberId] = String(assignedQuantity);
+          return accumulator;
+        }, {}),
+      }))
+    );
+    setAddTransactionModalVisible(true);
+  };
+
+  const updateTransactionItem = (
+    index: number,
+    field: keyof TransactionFormItem,
+    value: string
+  ) => {
+    setTransactionItems((previousItems) =>
+      previousItems.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              [field]: value,
+            }
+          : item
+      )
+    );
+  };
+
+  const addTransactionItemRow = () => {
+    const defaultAllocations = Object.fromEntries(
+      roomMembers.map((member) => [String(member.user.id), '0'])
+    );
+
+    setTransactionItems((previousItems) => [
+      ...previousItems,
+      {
+        itemName: '',
+        itemCount: '1',
+        unitPrice: '0',
+        allocations: defaultAllocations,
+      },
+    ]);
+  };
+
+  const updateTransactionAllocation = (itemIndex: number, userId: string, value: string) => {
+    setTransactionItems((previousItems) =>
+      previousItems.map((item, index) =>
+        index === itemIndex
+          ? {
+              ...item,
+              allocations: {
+                ...item.allocations,
+                [userId]: value,
+              },
+            }
+          : item
+      )
+    );
+  };
+
+  const removeTransactionItemRow = (index: number) => {
+    setTransactionItems((previousItems) => {
+      if (previousItems.length === 1) {
+        return previousItems;
+      }
+
+      return previousItems.filter((_, itemIndex) => itemIndex !== index);
+    });
+  };
+
+  const computeRoomDebt = () => {
+    if (!authenticatedUser) {
+      return {
+        userDebt: 0,
+        communalDebt: 0,
+        personalAssignedDebt: 0,
+      };
+    }
+
+    const memberCount = Math.max(roomMembers.length, 1);
+
+    const totals = roomTransactions.reduce(
+      (accumulator, transaction) => {
+        transaction.items.forEach((item) => {
+          const taken = item.taken;
+          const remainingCount =
+            typeof taken?.remainingCount === 'number'
+              ? taken.remainingCount
+              : item.itemCount - (taken?.takenCount ?? 0);
+
+          const communalPortion = Math.max(remainingCount, 0) * item.unitPrice;
+          accumulator.communalDebt += communalPortion;
+
+          const assignedToCurrentUser = (taken?.takenBy ?? [])
+            .filter((entry) => String(entry.userId) === String(authenticatedUser.id))
+            .reduce((sum, entry) => sum + entry.quantity * item.unitPrice, 0);
+
+          accumulator.personalAssignedDebt += assignedToCurrentUser;
+        });
+
+        return accumulator;
+      },
+      {
+        communalDebt: 0,
+        personalAssignedDebt: 0,
+      }
+    );
+
+    const userDebt = totals.communalDebt / memberCount + totals.personalAssignedDebt;
+
+    return {
+      userDebt,
+      communalDebt: totals.communalDebt,
+      personalAssignedDebt: totals.personalAssignedDebt,
+    };
+  };
+
   const submitTransaction = async () => {
     if (!openedRoom || !authenticatedUser) {
       return;
     }
 
     const companyName = transactionCompanyName.trim();
-    const itemName = transactionItemName.trim();
-    const itemCount = Number(transactionItemCount);
-    const unitPrice = Number(transactionUnitPrice);
+    const normalizedItems = transactionItems
+      .map((item) => ({
+        itemName: item.itemName.trim(),
+        itemCount: Number(item.itemCount),
+        unitPrice: Number(item.unitPrice),
+        allocations: Object.entries(item.allocations).map(([userId, quantity]) => ({
+          userId,
+          quantity: Number(quantity),
+        })),
+      }))
+      .filter((item) => item.itemName.length > 0);
 
-    if (!companyName || !itemName || !Number.isFinite(itemCount) || !Number.isFinite(unitPrice)) {
-      setRoomDetailsError('Please fill all transaction fields with valid values.');
+    if (!companyName || normalizedItems.length === 0) {
+      setRoomDetailsError('Please provide company name and at least one transaction item.');
       return;
     }
 
-    if (itemCount <= 0 || unitPrice < 0) {
+    const hasInvalidItem = normalizedItems.some(
+      (item) =>
+        !Number.isFinite(item.itemCount) ||
+        !Number.isFinite(item.unitPrice) ||
+        item.allocations.some((allocation) => !Number.isFinite(allocation.quantity))
+    );
+
+    if (hasInvalidItem) {
+      setRoomDetailsError('Each item must include valid count and unit price values.');
+      return;
+    }
+
+    const hasInvalidRange = normalizedItems.some((item) => item.itemCount <= 0 || item.unitPrice < 0);
+    if (hasInvalidRange) {
       setRoomDetailsError('Item count must be greater than 0 and unit price must be at least 0.');
+      return;
+    }
+
+    const hasInvalidAssignedQuantity = normalizedItems.some((item) =>
+      item.allocations.some((allocation) => allocation.quantity < 0)
+    );
+    if (hasInvalidAssignedQuantity) {
+      setRoomDetailsError('Assigned quantity must be at least 0 for each user.');
+      return;
+    }
+
+    const hasInvalidTotalAllocated = normalizedItems.some(
+      (item) =>
+        item.allocations.reduce((sum, allocation) => sum + allocation.quantity, 0) > item.itemCount
+    );
+    if (hasInvalidTotalAllocated) {
+      setRoomDetailsError('Assigned quantity across all users cannot exceed item count.');
       return;
     }
 
     try {
       setRoomActionLoading(true);
       setRoomDetailsError('');
-      await createRoomTransaction(openedRoom.id, {
-        companyName,
-        ownerUserId: authenticatedUser.id,
-        items: [
-          {
-            itemName,
-            itemCount,
-            unitPrice,
-          },
-        ],
-      });
+
+      let savedTransactionId = '';
+      let savedItems: Array<{ id: string }> = [];
+
+      if (editingTransaction) {
+        const response = await updateRoomTransaction(openedRoom.id, editingTransaction.id, {
+          companyName,
+          ownerUserId: authenticatedUser.id,
+          items: normalizedItems.map((item) => ({
+            itemName: item.itemName,
+            itemCount: item.itemCount,
+            unitPrice: item.unitPrice,
+          })),
+        });
+
+        savedTransactionId = response.transaction.id;
+        savedItems = response.transaction.items;
+      } else {
+        const response = await createRoomTransaction(openedRoom.id, {
+          companyName,
+          ownerUserId: authenticatedUser.id,
+          items: normalizedItems.map((item) => ({
+            itemName: item.itemName,
+            itemCount: item.itemCount,
+            unitPrice: item.unitPrice,
+          })),
+        });
+
+        savedTransactionId = response.transaction.id;
+        savedItems = response.transaction.items;
+      }
+
+      const allocationRequests = normalizedItems
+        .flatMap((item, index) => {
+          const savedItemId = savedItems[index]?.id;
+
+          if (!savedItemId) {
+            return [];
+          }
+
+          return item.allocations
+            .filter((allocation) => allocation.quantity > 0)
+            .map((allocation) => ({
+              savedItemId,
+              userId: Number(allocation.userId),
+              quantity: allocation.quantity,
+            }));
+        })
+        .filter((allocation) => Number.isFinite(allocation.userId));
+
+      if (allocationRequests.length > 0 && savedTransactionId) {
+        await Promise.all(
+          allocationRequests.map((allocation) => {
+            if (allocation.userId === authenticatedUser.id) {
+              return takeRoomTransactionItem(openedRoom.id, savedTransactionId, allocation.savedItemId, {
+                quantity: allocation.quantity,
+              });
+            }
+
+            return assignRoomTransactionItem(openedRoom.id, savedTransactionId, allocation.savedItemId, {
+              userId: allocation.userId,
+              quantity: allocation.quantity,
+            });
+          })
+        );
+      }
+
       setAddTransactionModalVisible(false);
-      setTransactionCompanyName('');
-      setTransactionItemName('');
-      setTransactionItemCount('1');
-      setTransactionUnitPrice('0');
-      setRoomDetailsStatus('Transaction created successfully.');
+      resetTransactionForm();
+      setRoomDetailsStatus(
+        editingTransaction ? 'Transaction updated successfully.' : 'Transaction created successfully.'
+      );
       await fetchRoomDetails(openedRoom);
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const message =
           typeof error.response?.data?.message === 'string'
             ? error.response.data.message
-            : 'Unable to create transaction right now.';
+            : editingTransaction
+              ? 'Unable to update transaction right now.'
+              : 'Unable to create transaction right now.';
         setRoomDetailsError(message);
       } else {
-        setRoomDetailsError('Unable to create transaction right now.');
+        setRoomDetailsError(
+          editingTransaction
+            ? 'Unable to update transaction right now.'
+            : 'Unable to create transaction right now.'
+        );
+      }
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const onDeleteTransaction = async () => {
+    if (!openedRoom || !editingTransaction) {
+      return;
+    }
+
+    try {
+      setRoomActionLoading(true);
+      setRoomDetailsError('');
+      const response = await deleteRoomTransaction(openedRoom.id, editingTransaction.id);
+      setAddTransactionModalVisible(false);
+      resetTransactionForm();
+      setRoomDetailsStatus(response.message || 'Transaction deleted successfully.');
+      await fetchRoomDetails(openedRoom);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to delete transaction right now.';
+        setRoomDetailsError(message);
+      } else {
+        setRoomDetailsError('Unable to delete transaction right now.');
       }
     } finally {
       setRoomActionLoading(false);
@@ -361,7 +658,6 @@ export default function App() {
       setRoomActionLoading(false);
     }
   };
-
   const onScannedCode = async (result: BarcodeScanningResult) => {
     if (hasProcessedScan || roomActionLoading) {
       return;
@@ -526,6 +822,25 @@ export default function App() {
                   <Text style={styles.roomsHeaderTitleSmall}>{openedRoom.name}</Text>
                 </View>
 
+                <View style={styles.debtCard}>
+                  {(() => {
+                    const debt = computeRoomDebt();
+
+                    return (
+                      <>
+                        <Text style={styles.debtTitle}>Your Debt</Text>
+                        <Text style={styles.debtValue}>${debt.userDebt.toFixed(2)}</Text>
+                        <Text style={styles.debtMeta}>
+                          Communal share: ${(debt.communalDebt / Math.max(roomMembers.length, 1)).toFixed(2)}
+                        </Text>
+                        <Text style={styles.debtMeta}>
+                          Your assigned items: ${debt.personalAssignedDebt.toFixed(2)}
+                        </Text>
+                      </>
+                    );
+                  })()}
+                </View>
+
                 <View style={styles.roomActionRow}>
                   <Pressable
                     style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
@@ -536,7 +851,7 @@ export default function App() {
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
-                    onPress={() => setAddTransactionModalVisible(true)}
+                    onPress={openCreateTransactionModal}
                   >
                     <MaterialIcons name="add-circle" size={20} color="#B8C3FF" />
                     <Text style={styles.roomActionText}>Add Transaction</Text>
@@ -550,24 +865,40 @@ export default function App() {
                 ) : (
                   <>
                     <View style={styles.sectionCard}>
-                      <Text style={styles.sectionTitle}>Members</Text>
-                      {roomMembers.length > 0 ? (
-                        roomMembers.map((entry) => (
-                          <View key={entry.user.id} style={styles.memberRow}>
-                            <Text style={styles.memberEmail}>{entry.user.email}</Text>
-                            <Text style={styles.memberRole}>{entry.membership.role}</Text>
-                          </View>
-                        ))
-                      ) : (
-                        <Text style={styles.emptyStateText}>No members found.</Text>
-                      )}
+                      <Pressable
+                        style={({ pressed }) => [styles.sectionHeaderButton, pressed && styles.modalOptionPressed]}
+                        onPress={() => setMembersExpanded((previous) => !previous)}
+                      >
+                        <Text style={styles.sectionTitle}>Members</Text>
+                        <MaterialIcons
+                          name={membersExpanded ? 'expand-less' : 'expand-more'}
+                          size={20}
+                          color="#A6B4FF"
+                        />
+                      </Pressable>
+                      {membersExpanded ? (
+                        roomMembers.length > 0 ? (
+                          roomMembers.map((entry) => (
+                            <View key={entry.user.id} style={styles.memberRow}>
+                              <Text style={styles.memberEmail}>{entry.user.email}</Text>
+                              <Text style={styles.memberRole}>{entry.membership.role}</Text>
+                            </View>
+                          ))
+                        ) : (
+                          <Text style={styles.emptyStateText}>No members found.</Text>
+                        )
+                      ) : null}
                     </View>
 
                     <View style={styles.sectionCard}>
                       <Text style={styles.sectionTitle}>Transactions</Text>
                       {roomTransactions.length > 0 ? (
                         roomTransactions.map((transaction) => (
-                          <View key={transaction.id} style={styles.transactionCard}>
+                          <Pressable
+                            key={transaction.id}
+                            style={({ pressed }) => [styles.transactionCard, pressed && styles.roomCardPressed]}
+                            onPress={() => openEditTransactionModal(transaction)}
+                          >
                             <View style={styles.transactionHead}>
                               <Text style={styles.transactionCompany}>{transaction.companyName}</Text>
                               <Text style={styles.transactionTotal}>
@@ -577,7 +908,7 @@ export default function App() {
                             <Text style={styles.transactionMeta}>
                               {transaction.items.length} item(s) • {transaction.owner.email}
                             </Text>
-                          </View>
+                          </Pressable>
                         ))
                       ) : (
                         <Text style={styles.emptyStateText}>No transactions found.</Text>
@@ -685,70 +1016,156 @@ export default function App() {
           visible={isAddTransactionModalVisible}
           transparent
           animationType="fade"
-          onRequestClose={() => setAddTransactionModalVisible(false)}
+          onRequestClose={() => {
+            setAddTransactionModalVisible(false);
+            resetTransactionForm();
+          }}
         >
           <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Add Transaction</Text>
-              <TextInput
-                placeholder="Company name"
-                placeholderTextColor="#8E90A2"
-                style={styles.modalInput}
-                value={transactionCompanyName}
-                onChangeText={setTransactionCompanyName}
-                editable={!roomActionLoading}
-              />
-              <TextInput
-                placeholder="Item name"
-                placeholderTextColor="#8E90A2"
-                style={styles.modalInput}
-                value={transactionItemName}
-                onChangeText={setTransactionItemName}
-                editable={!roomActionLoading}
-              />
-              <View style={styles.txInputRow}>
+            <View style={[styles.modalCard, styles.modalCardScrollable]}>
+              <ScrollView
+                style={styles.modalFormScroll}
+                contentContainerStyle={styles.modalFormScrollContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.modalTitle}>
+                  {editingTransaction ? 'Edit Transaction' : 'Add Transaction'}
+                </Text>
                 <TextInput
-                  placeholder="Count"
+                  placeholder="Company name"
                   placeholderTextColor="#8E90A2"
-                  style={[styles.modalInput, styles.txInputHalf]}
-                  keyboardType="number-pad"
-                  value={transactionItemCount}
-                  onChangeText={setTransactionItemCount}
+                  style={styles.modalInput}
+                  value={transactionCompanyName}
+                  onChangeText={setTransactionCompanyName}
                   editable={!roomActionLoading}
                 />
-                <TextInput
-                  placeholder="Unit price"
-                  placeholderTextColor="#8E90A2"
-                  style={[styles.modalInput, styles.txInputHalf]}
-                  keyboardType="decimal-pad"
-                  value={transactionUnitPrice}
-                  onChangeText={setTransactionUnitPrice}
-                  editable={!roomActionLoading}
-                />
-              </View>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modalPrimaryButton,
-                  pressed && styles.modalOptionPressed,
-                  roomActionLoading && styles.buttonDisabled,
-                ]}
-                onPress={() => {
-                  void submitTransaction();
-                }}
-                disabled={roomActionLoading}
-              >
-                {roomActionLoading ? (
-                  <ActivityIndicator color="#EFEFFF" />
-                ) : (
-                  <Text style={styles.modalPrimaryText}>Save Transaction</Text>
-                )}
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
-                onPress={() => setAddTransactionModalVisible(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </Pressable>
+
+                <View style={styles.itemsSectionWrap}>
+                  <Text style={styles.modalSectionLabel}>Items</Text>
+                  {transactionItems.map((item, index) => (
+                    <View key={index} style={styles.itemRowCard}>
+                      <View style={styles.itemRowHeader}>
+                        <Text style={styles.itemRowLabel}>Item {index + 1}</Text>
+                        {transactionItems.length > 1 ? (
+                          <Pressable
+                            style={({ pressed }) => [styles.itemRemoveBtn, pressed && styles.modalOptionPressed]}
+                            onPress={() => removeTransactionItemRow(index)}
+                            disabled={roomActionLoading}
+                          >
+                            <MaterialIcons name="delete-outline" size={18} color="#FFB4AB" />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      <TextInput
+                        placeholder="Item name"
+                        placeholderTextColor="#8E90A2"
+                        style={styles.modalInput}
+                        value={item.itemName}
+                        onChangeText={(value) => updateTransactionItem(index, 'itemName', value)}
+                        editable={!roomActionLoading}
+                      />
+                      <View style={styles.txInputRow}>
+                        <TextInput
+                          placeholder="Count"
+                          placeholderTextColor="#8E90A2"
+                          style={[styles.modalInput, styles.txInputHalf]}
+                          keyboardType="number-pad"
+                          value={item.itemCount}
+                          onChangeText={(value) => updateTransactionItem(index, 'itemCount', value)}
+                          editable={!roomActionLoading}
+                        />
+                        <TextInput
+                          placeholder="Unit price"
+                          placeholderTextColor="#8E90A2"
+                          style={[styles.modalInput, styles.txInputHalf]}
+                          keyboardType="decimal-pad"
+                          value={item.unitPrice}
+                          onChangeText={(value) => updateTransactionItem(index, 'unitPrice', value)}
+                          editable={!roomActionLoading}
+                        />
+                      </View>
+                      <Text style={styles.itemAssignLabel}>Assign quantities by user</Text>
+                      <View style={styles.allocationsList}>
+                        {roomMembers.map((member) => {
+                          const memberId = String(member.user.id);
+                          const isCurrentUser = memberId === String(authenticatedUser?.id);
+
+                          return (
+                            <View key={`${index}-${member.user.id}`} style={styles.allocationRow}>
+                              <Text style={styles.allocationUserText} numberOfLines={1}>
+                                {member.user.email}
+                                {isCurrentUser ? ' (you)' : ''}
+                              </Text>
+                              <TextInput
+                                placeholder="0"
+                                placeholderTextColor="#8E90A2"
+                                style={styles.allocationInput}
+                                keyboardType="number-pad"
+                                value={item.allocations[memberId] ?? '0'}
+                                onChangeText={(value) => updateTransactionAllocation(index, memberId, value)}
+                                editable={!roomActionLoading}
+                              />
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))}
+                  <Pressable
+                    style={({ pressed }) => [styles.addItemButton, pressed && styles.modalOptionPressed]}
+                    onPress={addTransactionItemRow}
+                    disabled={roomActionLoading}
+                  >
+                    <MaterialIcons name="add" size={16} color="#B8C3FF" />
+                    <Text style={styles.addItemButtonText}>Add Item</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modalPrimaryButton,
+                    pressed && styles.modalOptionPressed,
+                    roomActionLoading && styles.buttonDisabled,
+                  ]}
+                  onPress={() => {
+                    void submitTransaction();
+                  }}
+                  disabled={roomActionLoading}
+                >
+                  {roomActionLoading ? (
+                    <ActivityIndicator color="#EFEFFF" />
+                  ) : (
+                    <Text style={styles.modalPrimaryText}>
+                      {editingTransaction ? 'Save Changes' : 'Save Transaction'}
+                    </Text>
+                  )}
+                </Pressable>
+                {editingTransaction ? (
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.modalDangerButton,
+                      pressed && styles.modalOptionPressed,
+                      roomActionLoading && styles.buttonDisabled,
+                    ]}
+                    onPress={() => {
+                      void onDeleteTransaction();
+                    }}
+                    disabled={roomActionLoading}
+                  >
+                    <Text style={styles.modalDangerText}>Delete Transaction</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                  onPress={() => {
+                    setAddTransactionModalVisible(false);
+                    resetTransactionForm();
+                  }}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </Pressable>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -1290,6 +1707,33 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.8,
   },
+  debtCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#33438C',
+    backgroundColor: '#1C1B1C',
+    padding: 14,
+    gap: 4,
+    marginBottom: 12,
+  },
+  debtTitle: {
+    color: '#A6B4FF',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  debtValue: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  debtMeta: {
+    color: '#C4C5D9',
+    fontSize: 12,
+    fontWeight: '500',
+  },
   roomActionRow: {
     flexDirection: 'row',
     gap: 10,
@@ -1319,6 +1763,11 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
     gap: 8,
+  },
+  sectionHeaderButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   sectionTitle: {
     color: '#FFFFFF',
@@ -1469,6 +1918,16 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
+  modalCardScrollable: {
+    maxHeight: '88%',
+  },
+  modalFormScroll: {
+    flexGrow: 0,
+  },
+  modalFormScrollContent: {
+    gap: 10,
+    paddingBottom: 4,
+  },
   modalTitle: {
     color: '#FFFFFF',
     fontSize: 18,
@@ -1512,6 +1971,88 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 15,
   },
+  modalSectionLabel: {
+    color: '#C4C5D9',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  itemsSectionWrap: {
+    gap: 8,
+  },
+  itemRowCard: {
+    borderWidth: 1,
+    borderColor: '#353436',
+    borderRadius: 10,
+    padding: 10,
+    gap: 8,
+    backgroundColor: '#131314',
+  },
+  itemRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  itemRowLabel: {
+    color: '#A6B4FF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  itemAssignLabel: {
+    color: '#9FA2B5',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  allocationsList: {
+    gap: 8,
+  },
+  allocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  allocationUserText: {
+    flex: 1,
+    color: '#C4C5D9',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  allocationInput: {
+    width: 88,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#434656',
+    backgroundColor: '#131314',
+    color: '#E5E2E3',
+    paddingHorizontal: 12,
+    fontSize: 14,
+  },
+  itemRemoveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2A2A2B',
+  },
+  addItemButton: {
+    borderWidth: 1,
+    borderColor: '#434656',
+    borderStyle: 'dashed',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  addItemButtonText: {
+    color: '#B8C3FF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   modalPrimaryButton: {
     borderRadius: 10,
     backgroundColor: '#2E5BFF',
@@ -1521,6 +2062,18 @@ const styles = StyleSheet.create({
   },
   modalPrimaryText: {
     color: '#EFEFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalDangerButton: {
+    borderRadius: 10,
+    backgroundColor: '#93000A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  modalDangerText: {
+    color: '#FFDAD6',
     fontSize: 14,
     fontWeight: '700',
   },

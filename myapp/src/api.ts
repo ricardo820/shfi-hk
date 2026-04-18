@@ -145,6 +145,43 @@ export interface CreateRoomTransactionResponse {
   transaction: RoomTransaction;
 }
 
+export interface UpdateRoomTransactionPayload {
+  companyName?: string;
+  ownerUserId?: number;
+  items?: Array<{
+    itemName: string;
+    itemCount: number;
+    unitPrice: number;
+  }>;
+}
+
+export interface UpdateRoomTransactionResponse {
+  message?: string;
+  transaction: RoomTransaction;
+}
+
+export interface DeleteRoomTransactionResponse {
+  message: string;
+  deletedTransactionId: string;
+}
+
+export interface TakeItemPayload {
+  quantity: number;
+}
+
+export interface TakeItemResponse {
+  message?: string;
+}
+
+export interface AssignItemPayload {
+  userId: number;
+  quantity: number;
+}
+
+export interface AssignItemResponse {
+  message?: string;
+}
+
 export const register = async (payload: AuthRequest): Promise<RegisterResponse> => {
   const response = await api.post<RegisterResponse>('/auth/register', payload);
   return response.data;
@@ -193,6 +230,54 @@ export const createRoomTransaction = async (
 ): Promise<CreateRoomTransactionResponse> => {
   const response = await api.post<CreateRoomTransactionResponse>(
     `/rooms/${roomId}/transactions`,
+    payload
+  );
+  return response.data;
+};
+
+export const updateRoomTransaction = async (
+  roomId: string,
+  transactionId: string,
+  payload: UpdateRoomTransactionPayload
+): Promise<UpdateRoomTransactionResponse> => {
+  const response = await api.patch<UpdateRoomTransactionResponse>(
+    `/rooms/${roomId}/transactions/${transactionId}`,
+    payload
+  );
+  return response.data;
+};
+
+export const deleteRoomTransaction = async (
+  roomId: string,
+  transactionId: string
+): Promise<DeleteRoomTransactionResponse> => {
+  const response = await api.delete<DeleteRoomTransactionResponse>(
+    `/rooms/${roomId}/transactions/${transactionId}`
+  );
+  return response.data;
+};
+
+export const takeRoomTransactionItem = async (
+  roomId: string,
+  transactionId: string,
+  itemId: string,
+  payload: TakeItemPayload
+): Promise<TakeItemResponse> => {
+  const response = await api.post<TakeItemResponse>(
+    `/rooms/${roomId}/transactions/${transactionId}/items/${itemId}/take`,
+    payload
+  );
+  return response.data;
+};
+
+export const assignRoomTransactionItem = async (
+  roomId: string,
+  transactionId: string,
+  itemId: string,
+  payload: AssignItemPayload
+): Promise<AssignItemResponse> => {
+  const response = await api.post<AssignItemResponse>(
+    `/rooms/${roomId}/transactions/${transactionId}/items/${itemId}/assign`,
     payload
   );
   return response.data;
