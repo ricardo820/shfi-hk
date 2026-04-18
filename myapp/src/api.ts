@@ -195,9 +195,24 @@ export interface ReceiptScanResult {
   items: ReceiptScanItem[];
 }
 
+export interface VoiceReceiptAssignee {
+  email: string;
+  quantity: number;
+}
+
+export interface VoiceReceiptItem extends ReceiptScanItem {
+  purchasedFor: VoiceReceiptAssignee[];
+}
+
+export interface VoiceReceiptParseResult {
+  companyName: string;
+  totalAmount: number | null;
+  items: VoiceReceiptItem[];
+}
+
 export interface VoiceReceiptResult {
   transcript: string;
-  receipt: ReceiptScanResult;
+  receipt: VoiceReceiptParseResult;
 }
 
 const MINDEE_RECEIPT_MODEL_ID = 'ad61294e-5fe9-4309-a975-2980fa280aca'; //process.env.EXPO_PUBLIC_MINDEE_RECEIPT_MODEL_ID ?? '';
@@ -721,10 +736,19 @@ export const transcribeSpeechWithOpenAI = async (
 };
 
 export const parseSpeechToReceiptWithOpenAI = async (
-  transcript: string
-): Promise<ReceiptScanResult> => {
+  transcript: string,
+  roomMemberEmails: string[]
+): Promise<VoiceReceiptParseResult> => {
   openAiLog('Speech parse start');
   const apiKey = getOpenAiApiKey();
+  const normalizedMemberEmails = Array.from(
+    new Set(
+      roomMemberEmails
+        .map((email) => email.trim().toLowerCase())
+        .filter((email) => email.length > 0)
+    )
+  );
+  const allowedEmailSet = new Set(normalizedMemberEmails);
 
   const response = await fetch(`${OPENAI_API_BASE_URL}/chat/completions`, {
     method: 'POST',
@@ -756,8 +780,20 @@ export const parseSpeechToReceiptWithOpenAI = async (
                     quantity: { type: 'number' },
                     unitPrice: { type: 'number' },
                     lineTotal: { type: ['number', 'null'] },
+                    purchasedFor: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          email: { type: 'string' },
+                          quantity: { type: 'number' },
+                        },
+                        required: ['email', 'quantity'],
+                      },
+                    },
                   },
-                  required: ['name', 'quantity', 'unitPrice', 'lineTotal'],
+                  required: ['name', 'quantity', 'unitPrice', 'lineTotal', 'purchasedFor'],
                 },
               },
             },
@@ -769,11 +805,15 @@ export const parseSpeechToReceiptWithOpenAI = async (
         {
           role: 'system',
           content:
-            'Extract receipt-like structured data from spoken text. Use quantity and unitPrice per item. If missing, set sensible defaults: quantity=1, unitPrice=0, lineTotal=null.',
+            'Extract receipt-like structured data from spoken text. Use quantity and unitPrice per item. If missing, set sensible defaults: quantity=1, unitPrice=0, lineTotal=null. Also infer who each item was purchased for. Return purchasedFor as a list of {email, quantity}. Use only exact emails from the provided allowed-members list. If no valid member can be inferred for an item, return purchasedFor as an empty array.',
         },
         {
           role: 'user',
           content: transcript,
+        },
+        {
+          role: 'user',
+          content: `Allowed members (emails): ${normalizedMemberEmails.join(', ')}`,
         },
       ],
     }),
@@ -797,7 +837,7 @@ export const parseSpeechToReceiptWithOpenAI = async (
     throw new Error('OpenAI speech parse returned empty content.');
   }
 
-  const receipt = JSON.parse(content) as ReceiptScanResult;
+  const receipt = JSON.parse(content) as VoiceReceiptParseResult;
 
   return {
     companyName: typeof receipt.companyName === 'string' && receipt.companyName.trim()
@@ -822,6 +862,30 @@ export const parseSpeechToReceiptWithOpenAI = async (
               typeof item.lineTotal === 'number' && Number.isFinite(item.lineTotal)
                 ? item.lineTotal
                 : null,
+            purchasedFor: Array.isArray(item.purchasedFor)
+              ? item.purchasedFor
+                  .map((assignee) => ({
+                    email:
+                      typeof assignee.email === 'string'
+                        ? assignee.email.trim().toLowerCase()
+                        : '',
+                    quantity:
+                      typeof assignee.quantity === 'number' && Number.isFinite(assignee.quantity)
+                        ? Math.max(1, Math.round(assignee.quantity))
+                        : 1,
+                  }))
+                  .filter((assignee) => assignee.email.length > 0 && allowedEmailSet.has(assignee.email))
+                  .reduce<VoiceReceiptAssignee[]>((accumulator, assignee) => {
+                    const existing = accumulator.find((entry) => entry.email === assignee.email);
+                    if (existing) {
+                      existing.quantity += assignee.quantity;
+                    } else {
+                      accumulator.push({ ...assignee });
+                    }
+
+                    return accumulator;
+                  }, [])
+              : [],
           }))
           .filter((item) => item.name.length > 0)
       : [],
@@ -830,10 +894,11 @@ export const parseSpeechToReceiptWithOpenAI = async (
 
 export const buildReceiptFromVoiceWithOpenAI = async (
   audioUri: string,
-  mimeType = 'audio/m4a'
+  mimeType = 'audio/m4a',
+  roomMemberEmails: string[] = []
 ): Promise<VoiceReceiptResult> => {
   const transcript = await transcribeSpeechWithOpenAI(audioUri, mimeType);
-  const receipt = await parseSpeechToReceiptWithOpenAI(transcript);
+  const receipt = await parseSpeechToReceiptWithOpenAI(transcript, roomMemberEmails);
 
   return {
     transcript,

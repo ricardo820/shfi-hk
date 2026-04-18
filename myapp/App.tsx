@@ -53,6 +53,19 @@ type TransactionFormItem = {
   allocations: Record<string, string>;
 };
 
+type VoiceAssignee = {
+  email: string;
+  quantity: number;
+};
+
+type VoiceAwareReceiptItem = ReceiptScanResult['items'][number] & {
+  purchasedFor?: VoiceAssignee[];
+};
+
+type VoiceAwareReceipt = Omit<ReceiptScanResult, 'items'> & {
+  items: VoiceAwareReceiptItem[];
+};
+
 const STORAGE_KEYS = {
   token: 'auth_token',
   user: 'auth_user',
@@ -370,16 +383,52 @@ export default function App() {
     ]);
   };
 
-  const fillTransactionFromReceipt = (parsedReceipt: ReceiptScanResult) => {
+  const fillTransactionFromReceipt = (parsedReceipt: VoiceAwareReceipt) => {
     const defaultAllocations = getDefaultAllocations();
+    const memberIdByEmail = new Map(
+      roomMembers.map((member) => [member.user.email.trim().toLowerCase(), String(member.user.id)])
+    );
     const parsedItems =
       parsedReceipt.items.length > 0
-        ? parsedReceipt.items.map((item) => ({
-            itemName: item.name,
-            itemCount: String(Math.max(1, item.quantity)),
-            unitPrice: String(item.unitPrice),
-            allocations: { ...defaultAllocations },
-          }))
+        ? parsedReceipt.items.map((item) => {
+            const itemCount = Math.max(1, item.quantity);
+            const allocations = { ...defaultAllocations };
+
+            if (Array.isArray(item.purchasedFor) && item.purchasedFor.length > 0) {
+              let remaining = itemCount;
+
+              item.purchasedFor.forEach((assignee) => {
+                if (remaining <= 0) {
+                  return;
+                }
+
+                const normalizedEmail = assignee.email.trim().toLowerCase();
+                const memberId = memberIdByEmail.get(normalizedEmail);
+
+                if (!memberId) {
+                  return;
+                }
+
+                const requestedQuantity =
+                  Number.isFinite(assignee.quantity) && assignee.quantity > 0
+                    ? Math.max(1, Math.round(assignee.quantity))
+                    : 1;
+                const acceptedQuantity = Math.min(requestedQuantity, remaining);
+                const current = Number(allocations[memberId] ?? '0');
+                allocations[memberId] = String(
+                  (Number.isFinite(current) ? current : 0) + acceptedQuantity
+                );
+                remaining -= acceptedQuantity;
+              });
+            }
+
+            return {
+              itemName: item.name,
+              itemCount: String(itemCount),
+              unitPrice: String(item.unitPrice),
+              allocations,
+            };
+          })
         : [
             {
               itemName: 'Receipt Total',
@@ -562,7 +611,11 @@ export default function App() {
         throw new Error('Voice recording URI is unavailable.');
       }
 
-      const parsed = await buildReceiptFromVoiceWithOpenAI(recordingUri, 'audio/m4a');
+      const parsed = await buildReceiptFromVoiceWithOpenAI(
+        recordingUri,
+        'audio/m4a',
+        roomMembers.map((member) => member.user.email)
+      );
       const hasDetectedItems = parsed.receipt.items.length > 0;
       const hasDetectedTotal =
         typeof parsed.receipt.totalAmount === 'number' && parsed.receipt.totalAmount > 0;
@@ -574,7 +627,15 @@ export default function App() {
 
       setVoiceTranscript(parsed.transcript);
       fillTransactionFromReceipt(parsed.receipt);
-      setRoomDetailsStatus('Voice parsed. Review parsed items and save transaction.');
+      const inferredAssignments = parsed.receipt.items.reduce(
+        (sum, item) => sum + (Array.isArray(item.purchasedFor) ? item.purchasedFor.length : 0),
+        0
+      );
+      setRoomDetailsStatus(
+        inferredAssignments > 0
+          ? 'Voice parsed. Item assignees were inferred from member emails; review and save transaction.'
+          : 'Voice parsed. Review parsed items and save transaction.'
+      );
       setVoiceStatus('Parsed successfully. Opening transaction form…');
       setVoiceModalVisible(false);
     } catch (error) {
