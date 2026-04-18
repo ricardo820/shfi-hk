@@ -1,30 +1,49 @@
 # Internal Handoff Note
 **Date**: April 18, 2026
 **Project**: shfi-hk / myapp (Expo React Native)
-**Goal**: Initial setup for a scalable React Native application targeting Mobile (iOS/Android) and Web, with a base structure for API communication.
+**Goal**: Build login/register screen and connect it to backend auth REST API.
 
 ## 1. What Was Accomplished
-- **Environment Diagnostics**: Discovered that running global `npm` scripts via PowerShell natively throws a `PSSecurityException` due to the Windows Execution Policy restricting `.ps1` script execution.
-- **Project Bootstrapping**: Successfully bypassed the restriction using `cmd /c`. Initialized a new React Native app named `myapp` using Expo with the `blank-typescript` template.
-- **Dependencies Installed**:
-  - `react-native-web`, `react-dom`, `@expo/metro-runtime` (to support web builds).
-  - `axios` (for API networking).
-- **Core Files Configured**:
-  - `src/api.ts`: Scaffolding for an Axios instance with base URL and timeout configurations.
-  - `App.tsx`: Updated to test the `api` import and display a blank template welcome message.
+- **Runtime compatibility fix for current environment**:
+  - Expo/Metro on Node `v18.19.1` failed with `TypeError: configs.toReversed is not a function`.
+  - Added `scripts/node-compat.cjs` with polyfills for modern Array methods used by tooling.
+  - Updated `package.json` scripts to run Expo CLI through `node -r ./scripts/node-compat.cjs ...`.
+- **Bundling fix**:
+  - Corrected logo asset import in `App.tsx` from non-existent `assets/icom.png` to existing `assets/icon.png`.
+- **Auth API wired**:
+  - `src/api.ts` now exports typed helpers for:
+    - `register(payload)` → `POST /auth/register`
+    - `login(payload)` → `POST /auth/login`
+    - `protectedGet(path)` for authenticated/protected GET calls
+  - Added request/response TypeScript interfaces (`AuthRequest`, `User`, `LoginResponse`, `RegisterResponse`).
+  - Added `setAuthToken(token)` and Axios request interceptor to automatically attach:
+    - `Authorization: Bearer <token>`
+    - to API requests after login/session restore.
+- **Login/Register screen implemented** in `App.tsx`:
+  - Dark UI matching the provided `login_ui_template.html` direction.
+  - Centered SHFI branding using `assets/icon.png`.
+  - Email + password form inputs.
+  - Primary action button executes current mode (`Sign In` or `Register`).
+  - Secondary action toggles between login and register modes.
+  - Loading state disables buttons and shows spinner.
+  - API validation/server failures are shown as inline error messages.
+  - Registration success is shown as inline status text and switches mode back to Sign In.
+  - Successful login redirects to an in-app homepage view (authenticated state) with logout.
+  - JWT + user are persisted in local storage via `@react-native-async-storage/async-storage`.
+  - On app startup, persisted session is restored and user is redirected directly to homepage (skips login).
+  - Logout clears persisted session and auth token header state.
 
 ## 2. Environment Gotchas (IMPORTANT)
-Due to the PowerShell script execution policy on this Windows machine:
-- **Do not run `npm` or `npx` directly in PowerShell** if it invokes a global bin script. 
-- **Workaround**: Always prefix `npm` and `npx` commands with `cmd /c` (e.g., `cmd /c npm start`, `cmd /c npx expo install ...`). This forces the command prompt to handle the execution and bypasses the PowerShell restriction.
+Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 
 ## 3. Current Project State
-The project is a clean slate. It successfully compiles and the Metro bundler can serve it.
-- **Location**: `C:\Users\zelen\shfi-hk\myapp`
-- **Framework**: Expo (React Native) + TypeScript.
+- **Location**: `/home/adam/shfi-hk/myapp`
+- **Framework**: Expo (React Native) + TypeScript
+- **Networking**: Axios instance targets `http://hack.marrb.net:3000`
+- **Auth endpoints used**:
+  - `POST /auth/register`
+  - `POST /auth/login`
 
 ## 4. Next Steps
-- Define and implement actual API endpoints in `src/api.ts`.
-- Set up state management (e.g., Redux Toolkit or Zustand) if the application scales up in complexity.
-- Build out directory structure (`src/screens`, `src/components`, `src/navigation`).
-- Configure React Navigation for routing between screens.
+- Replace temporary homepage state view with proper navigation/routing stack.
+- Add API tests and integration checks for auth flow.
