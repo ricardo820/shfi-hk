@@ -126,6 +126,10 @@
   - Added verbose tracing logs for receipt scan path:
     - UI logs for scan start/completion (single + live)
     - API logs for invocation/runtime path, enqueue response, polling ticks/status, non-OK poll responses, result fetch, and completion.
+  - Mobile runtime upload fix:
+    - client runtime no longer does `fetch(file://...)` to create a Blob (can throw `Network request failed` on device)
+    - now sends receipt file using React Native FormData file object `{ uri, name, type }`.
+  - Added explicit log for enqueue network failures with image URI + mime type context.
 
 ## 2. Environment Gotchas (IMPORTANT)
 Current working environment is Linux. Standard `npm`/`npx` usage is expected.

@@ -465,18 +465,26 @@ const scanReceiptWithRawHttp = async (
 ): Promise<ReceiptScanResult> => {
   mindeeLog('HTTP scan start', { imageUri, mimeType });
   const modelId = getMindeeReceiptModelId();
-
-  const imageResponse = await fetch(imageUri);
-  if (!imageResponse.ok) {
-    throw new Error('Unable to load receipt image for scanning.');
-  }
-
-  const imageBlob = await imageResponse.blob();
   const fileName = `receipt.${mimeType.includes('png') ? 'png' : 'jpg'}`;
 
   const formData = new FormData();
   formData.append('model_id', modelId);
-  formData.append('file', imageBlob, fileName);
+
+  if (isNodeRuntime()) {
+    const imageResponse = await fetch(imageUri);
+    if (!imageResponse.ok) {
+      throw new Error('Unable to load receipt image for scanning.');
+    }
+
+    const imageBlob = await imageResponse.blob();
+    formData.append('file', imageBlob, fileName);
+  } else {
+    formData.append('file', {
+      uri: imageUri,
+      name: fileName,
+      type: mimeType,
+    } as unknown as Blob);
+  }
 
   const parseMindeeJsonResponse = async <T>(response: Response): Promise<T> => {
     const rawBody = await response.text();
@@ -508,13 +516,23 @@ const scanReceiptWithRawHttp = async (
     return parsedBody;
   };
 
-  const enqueueResponse = await fetch(`${MINDEE_V2_BASE_URL}/v2/products/extraction/enqueue`, {
-    method: 'POST',
-    headers: {
-      Authorization: MINDEE_API_TOKEN,
-    },
-    body: formData,
-  });
+  let enqueueResponse: Response;
+  try {
+    enqueueResponse = await fetch(`${MINDEE_V2_BASE_URL}/v2/products/extraction/enqueue`, {
+      method: 'POST',
+      headers: {
+        Authorization: MINDEE_API_TOKEN,
+      },
+      body: formData,
+    });
+  } catch (error) {
+    mindeeLog('Enqueue network failure', {
+      message: error instanceof Error ? error.message : String(error),
+      imageUri,
+      mimeType,
+    });
+    throw error;
+  }
 
   const enqueueData = await parseMindeeJsonResponse<MindeeV2ExtractionResponse>(enqueueResponse);
   const initialJob: MindeeV2Job = enqueueData.job ?? {};
