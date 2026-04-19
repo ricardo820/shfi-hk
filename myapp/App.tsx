@@ -13,6 +13,7 @@ import {
   Text,
   TextInput,
   View,
+  StatusBar as RNStatusBar,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -407,9 +408,9 @@ export default function App() {
       previousItems.map((item, itemIndex) =>
         itemIndex === index
           ? {
-              ...item,
-              [field]: value,
-            }
+            ...item,
+            [field]: value,
+          }
           : item
       )
     );
@@ -437,52 +438,52 @@ export default function App() {
     const parsedItems =
       parsedReceipt.items.length > 0
         ? parsedReceipt.items.map((item) => {
-            const itemCount = Math.max(1, item.quantity);
-            const allocations = { ...defaultAllocations };
+          const itemCount = Math.max(1, item.quantity);
+          const allocations = { ...defaultAllocations };
 
-            if (Array.isArray(item.purchasedFor) && item.purchasedFor.length > 0) {
-              let remaining = itemCount;
+          if (Array.isArray(item.purchasedFor) && item.purchasedFor.length > 0) {
+            let remaining = itemCount;
 
-              item.purchasedFor.forEach((assignee) => {
-                if (remaining <= 0) {
-                  return;
-                }
+            item.purchasedFor.forEach((assignee) => {
+              if (remaining <= 0) {
+                return;
+              }
 
-                const normalizedEmail = assignee.email.trim().toLowerCase();
-                const memberId = memberIdByEmail.get(normalizedEmail);
+              const normalizedEmail = assignee.email.trim().toLowerCase();
+              const memberId = memberIdByEmail.get(normalizedEmail);
 
-                if (!memberId) {
-                  return;
-                }
+              if (!memberId) {
+                return;
+              }
 
-                const requestedQuantity =
-                  Number.isFinite(assignee.quantity) && assignee.quantity > 0
-                    ? Math.max(1, Math.round(assignee.quantity))
-                    : 1;
-                const acceptedQuantity = Math.min(requestedQuantity, remaining);
-                const current = Number(allocations[memberId] ?? '0');
-                allocations[memberId] = String(
-                  (Number.isFinite(current) ? current : 0) + acceptedQuantity
-                );
-                remaining -= acceptedQuantity;
-              });
-            }
+              const requestedQuantity =
+                Number.isFinite(assignee.quantity) && assignee.quantity > 0
+                  ? Math.max(1, Math.round(assignee.quantity))
+                  : 1;
+              const acceptedQuantity = Math.min(requestedQuantity, remaining);
+              const current = Number(allocations[memberId] ?? '0');
+              allocations[memberId] = String(
+                (Number.isFinite(current) ? current : 0) + acceptedQuantity
+              );
+              remaining -= acceptedQuantity;
+            });
+          }
 
-            return {
-              itemName: item.name,
-              itemCount: String(itemCount),
-              unitPrice: String(item.unitPrice),
-              allocations,
-            };
-          })
+          return {
+            itemName: item.name,
+            itemCount: String(itemCount),
+            unitPrice: String(item.unitPrice),
+            allocations,
+          };
+        })
         : [
-            {
-              itemName: 'Receipt Total',
-              itemCount: '1',
-              unitPrice: String(Math.max(0, parsedReceipt.totalAmount ?? 0)),
-              allocations: { ...defaultAllocations },
-            },
-          ];
+          {
+            itemName: 'Receipt Total',
+            itemCount: '1',
+            unitPrice: String(Math.max(0, parsedReceipt.totalAmount ?? 0)),
+            allocations: { ...defaultAllocations },
+          },
+        ];
 
     setEditingTransaction(null);
     setTransactionCompanyName(parsedReceipt.companyName || 'Receipt');
@@ -817,12 +818,12 @@ export default function App() {
       previousItems.map((item, index) =>
         index === itemIndex
           ? {
-              ...item,
-              allocations: {
-                ...item.allocations,
-                [userId]: value,
-              },
-            }
+            ...item,
+            allocations: {
+              ...item.allocations,
+              [userId]: value,
+            },
+          }
           : item
       )
     );
@@ -2155,6 +2156,7 @@ const styles = StyleSheet.create({
   homeScreen: {
     flex: 1,
     backgroundColor: '#131314',
+    paddingTop: (Platform.OS === 'android' || Platform.OS === 'ios') ? RNStatusBar.currentHeight : 0,
   },
   homeContentWrap: {
     display: 'none',
