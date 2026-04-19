@@ -71,50 +71,89 @@ const STORAGE_KEYS = {
   user: 'auth_user',
 };
 
-type NavItem = {
-  key: 'home' | 'assets' | 'market' | 'profile';
-  label: 'Home' | 'Assets' | 'Market' | 'Profile';
-  icon: 'grid-view' | 'account-balance-wallet' | 'monitor' | 'person';
-};
-
-const NAV_ITEMS: NavItem[] = [
-  { key: 'home', label: 'Home', icon: 'grid-view' },
-  { key: 'assets', label: 'Assets', icon: 'account-balance-wallet' },
-  { key: 'market', label: 'Market', icon: 'monitor' },
-  { key: 'profile', label: 'Profile', icon: 'person' },
-];
+type NavItemKey = 'home' | 'settings';
 
 function BottomNavBar({
   activeKey,
   onSelect,
 }: {
-  activeKey: NavItem['key'];
-  onSelect: (key: NavItem['key']) => void;
+  activeKey: NavItemKey;
+  onSelect: (key: NavItemKey | 'add') => void;
 }) {
   return (
     <View style={styles.bottomNavShell}>
-      {NAV_ITEMS.map((item) => {
-        const isActive = item.key === activeKey;
+      <Pressable
+        style={({ pressed }) => [
+          styles.navItem,
+          pressed && styles.navItemPressed,
+        ]}
+        onPress={() => onSelect('home')}
+      >
+        <MaterialIcons
+          name="home"
+          size={24}
+          color={activeKey === 'home' ? '#E5E2E3' : '#737373'}
+        />
+        <Text style={[styles.navLabel, activeKey === 'home' ? styles.navLabelActive : styles.navLabelInactive]}>HOME</Text>
+      </Pressable>
 
-        return (
-          <Pressable
-            key={item.key}
-            style={({ pressed }) => [
-              styles.navItem,
-              isActive && styles.navItemActive,
-              pressed && styles.navItemPressed,
-            ]}
-            onPress={() => onSelect(item.key)}
-          >
-            <MaterialIcons
-              name={item.icon}
-              size={22}
-              color={isActive ? '#2E5BFF' : '#8E90A2'}
-            />
-            <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
+      <Pressable
+        style={({ pressed }) => [
+          styles.navItemAddContainer,
+          pressed && styles.navItemPressed,
+        ]}
+        onPress={() => onSelect('add')}
+      >
+        <MaterialIcons
+          name="add"
+          size={24}
+          color="#3B82F6"
+        />
+        <Text style={styles.navLabelAdd}>ADD</Text>
+      </Pressable>
+
+      <Pressable
+        style={({ pressed }) => [
+          styles.navItem,
+          pressed && styles.navItemPressed,
+        ]}
+        onPress={() => onSelect('settings')}
+      >
+        <MaterialIcons
+          name="settings"
+          size={24}
+          color={activeKey === 'settings' ? '#E5E2E3' : '#737373'}
+        />
+        <Text style={[styles.navLabel, activeKey === 'settings' ? styles.navLabelActive : styles.navLabelInactive]}>SETTINGS</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function TopNavBar({ user }: { user: User | null }) {
+  const getFirstName = (email: string) => {
+    const namePart = email.split('@')[0].split(/[._-]/)[0];
+    if (!namePart) return 'USER';
+    return namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase();
+  };
+  const displayName = user ? getFirstName(user.email) : 'SHFI';
+
+  return (
+    <View style={styles.topNavShell}>
+      <View style={styles.topNavLeft}>
+        <Pressable style={({ pressed }) => [pressed && styles.navItemPressed]}>
+          <MaterialIcons name="mail" size={24} color="#FFFFFF" />
+        </Pressable>
+      </View>
+      <View style={styles.topNavCenter}>
+        <Image
+          source={require('./assets/icon.png')}
+          style={styles.topNavProfileImage}
+        />
+      </View>
+      <View style={styles.topNavRight}>
+        <Text style={styles.topNavLogoText}>{displayName}</Text>
+      </View>
     </View>
   );
 }
@@ -158,7 +197,7 @@ export default function App() {
       allocations: {},
     },
   ]);
-  const [activeNav, setActiveNav] = useState<NavItem['key']>('home');
+  const [activeNav, setActiveNav] = useState<NavItemKey>('home');
   const [isLiveReceiptScannerVisible, setLiveReceiptScannerVisible] = useState(false);
   const [isLiveReceiptScanning, setLiveReceiptScanning] = useState(false);
   const [isLiveReceiptProcessing, setLiveReceiptProcessing] = useState(false);
@@ -291,7 +330,12 @@ export default function App() {
     setMode('login');
   };
 
-  const onNavSelect = (key: NavItem['key']) => {
+  const onNavSelect = (key: NavItemKey | 'add') => {
+    if (key === 'add') {
+      setAddRoomModalVisible(true);
+      return;
+    }
+
     if (key === 'home') {
       setActiveNav('home');
       setOpenedRoom(null);
@@ -300,13 +344,15 @@ export default function App() {
       return;
     }
 
-    if (key === 'profile') {
-      setActiveNav('profile');
+    if (key === 'settings') {
+      setActiveNav('settings');
       setOpenedRoom(null);
       return;
     }
 
-    setActiveNav(key);
+    if (key !== 'add') {
+      setActiveNav(key);
+    }
   };
 
   const resetTransactionForm = () => {
@@ -1191,8 +1237,9 @@ export default function App() {
   if (authenticatedUser) {
     return (
       <SafeAreaView style={styles.homeScreen}>
+        <TopNavBar user={authenticatedUser} />
         <View style={styles.roomsContentWrap}>
-          {activeNav === 'profile' ? (
+          {activeNav === 'settings' ? (
             <View style={styles.profileWrap}>
               <View style={styles.profileCard}>
                 <Text style={styles.profileTitle}>Profile</Text>
@@ -2115,7 +2162,7 @@ const styles = StyleSheet.create({
   roomsContentWrap: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingTop: 20,
+    paddingTop: 80,
     paddingBottom: 104,
   },
   roomsHeader: {
@@ -2441,6 +2488,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 10,
   },
+  topNavShell: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(13, 13, 14, 0.8)',
+    zIndex: 50,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  topNavLeft: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  topNavCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  topNavRight: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  topNavProfileImage: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  topNavLogoText: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+  },
   bottomNavShell: {
     position: 'absolute',
     left: 0,
@@ -2450,36 +2535,51 @@ const styles = StyleSheet.create({
     justifyContent: 'space-around',
     alignItems: 'center',
     paddingHorizontal: 32,
-    paddingTop: 10,
-    paddingBottom: 22,
+    paddingTop: 12,
+    paddingBottom: 24,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.06)',
-    backgroundColor: 'rgba(13, 13, 14, 0.94)',
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: 'rgba(10, 10, 10, 0.9)',
   },
   navItem: {
-    minWidth: 72,
-    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 5,
+    minWidth: 64,
   },
-  navItemActive: {
-    backgroundColor: 'rgba(46, 91, 255, 0.12)',
+  navItemAddContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    minWidth: 64,
   },
   navItemPressed: {
     opacity: 0.85,
-    transform: [{ scale: 0.95 }],
+    transform: [{ scale: 0.9 }],
   },
   navLabel: {
-    marginTop: 3,
-    color: '#8E90A2',
-    fontSize: 10,
+    marginTop: 4,
+    fontSize: 11,
     fontWeight: '500',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+  navLabelInactive: {
+    color: '#737373',
+  },
   navLabelActive: {
-    color: '#2E5BFF',
+    color: '#E5E2E3',
+  },
+  navLabelAdd: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: '#3B82F6',
   },
   modalBackdrop: {
     flex: 1,

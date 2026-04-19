@@ -32,13 +32,16 @@
   - JWT + user are persisted in local storage via `@react-native-async-storage/async-storage`.
   - On app startup, persisted session is restored and user is redirected directly to homepage (skips login).
   - Logout clears persisted session and auth token header state.
-- **Bottom navigation added for non-auth pages**:
-  - Implemented shared bottom nav in `App.tsx` for authenticated screens (all pages except login/register).
-  - Style follows provided navbar UI example direction with dark glass-like footer.
-  - Current items are `Home / Assets / Market / Profile`.
-  - `Home` now always routes back to the default page (room list).
-  - `Profile` now routes to a dedicated profile page showing current user info and a logout button.
-  - Login/Register screen intentionally does not render the bottom navigation.
+- **Bottom navigation replaced with new UI design**:
+  - Replaced the previous 4-item navbar with a new 3-item layout (`Home`, `Add`, `Settings`) based on `navbar_ui_example.html`.
+  - Implemented custom Tailwind-like glassmorphism styling in React Native using transparent backgrounds and absolute positioning.
+  - The `Add` button uses a distinct blue background and triggers the Add Room modal directly from the navbar.
+  - Re-mapped the old `Profile` route to the new `Settings` item, preserving the profile and logout view.
+  - The bottom navbar is only rendered on authenticated pages.
+- **Top navigation added across the app**:
+  - Implemented `TopNavBar` based on `topbar_ui.html` design, featuring a mail icon, central profile logo, and dynamic right-side branding.
+  - Integrated into authenticated layouts to ensure a consistent app-wide shell.
+  - Automatically extracts and displays the logged-in user's first name, defaulting back to "SHFI" when the user is logged out.
 - **Rooms screen implemented as default logged-in page**:
   - Replaced temporary authenticated homepage with a Rooms list screen in `App.tsx`.
   - Screen follows `rooms_ui_example.html` visual direction (dark glass cards, heading, CTA patterns).
