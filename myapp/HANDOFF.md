@@ -126,14 +126,18 @@
   - Transaction create flow now publishes `transaction_added` notification after successful room transaction creation.
   - Settlement flow now publishes `debt_pushed` notifications after debtor confirms payment and settlement write-back is applied.
   - Added opened-room header `notify` button (visible when current user is net creditor in that room) to send debt notifications to server for outstanding debtor links.
-  - Expo Go compatibility update:
-    - removed `expo-notifications` and `expo-device` usage because push notifications are not supported in Expo Go for current SDK behavior
-    - app now relies on websocket realtime notifications + in-app status messaging while app is running.
+  - Notification UX update:
+    - removed inline notification status/error texts from home/room screens
+    - notification lifecycle is now logged to console (connect, receive, disconnect, publish errors).
+  - Local notification delivery update:
+    - web: uses browser Notification API (with permission request) to display real system notifications
+    - android/ios: uses `expo-notifications` local scheduling to display real notifications when websocket events arrive
+    - android channel configured with high importance (`MAX`) for visible alert delivery.
   - Added realtime websocket connection to server notifications endpoint:
     - connects to `ws://hack.marrb.net:3000/ws/notifications?token=<jwt>`
     - sends periodic ping keepalive
-    - on `room_notification`, updates in-app notification status text and refreshes currently opened room transactions.
-  - Note: device wake/background push delivery requires a development build / production native build with platform push services.
+    - on `room_notification`, emits a local platform notification and refreshes currently opened room transactions.
+  - Note: in Expo Go, remote push handling has limitations; reliable background/wake push requires a development/production native build.
 - **Rooms API client expanded** (`src/api.ts`):
   - Added typed methods:
     - `listRooms()`

@@ -19,6 +19,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
+import * as Notifications from 'expo-notifications';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
@@ -204,8 +205,6 @@ export default function App() {
   const [settleLoadingRoomId, setSettleLoadingRoomId] = useState<string | null>(null);
   const [settleAllLoading, setSettleAllLoading] = useState(false);
   const [debtNotificationLoading, setDebtNotificationLoading] = useState(false);
-  const [pushStatusMessage, setPushStatusMessage] = useState('');
-  const [pushErrorMessage, setPushErrorMessage] = useState('');
   const [isPaymentGateVisible, setPaymentGateVisible] = useState(false);
   const [paymentGateAmount, setPaymentGateAmount] = useState(0);
   const [paymentGateContext, setPaymentGateContext] = useState('');
@@ -244,6 +243,59 @@ export default function App() {
     return 'Room notification received.';
   };
 
+  const ensureWebNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'web') {
+      return true;
+    }
+
+    const notificationApi = (globalThis as { Notification?: { permission?: string; requestPermission?: () => Promise<string> } }).Notification;
+
+    if (!notificationApi) {
+      console.info('[Notifications] Web Notification API unavailable.');
+      return false;
+    }
+
+    if (notificationApi.permission === 'granted') {
+      return true;
+    }
+
+    if (notificationApi.permission === 'denied') {
+      console.info('[Notifications] Web notifications denied by user.');
+      return false;
+    }
+
+    if (typeof notificationApi.requestPermission !== 'function') {
+      return false;
+    }
+
+    const permission = await notificationApi.requestPermission();
+    return permission === 'granted';
+  };
+
+  const showLocalNotification = async (title: string, body: string) => {
+    if (Platform.OS === 'web') {
+      const canNotify = await ensureWebNotificationPermission();
+      if (!canNotify) {
+        return;
+      }
+
+      const notificationApi = (globalThis as { Notification?: new (title: string, options?: { body?: string }) => unknown }).Notification;
+      if (notificationApi) {
+        new notificationApi(title, { body });
+      }
+      return;
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound: 'default',
+      },
+      trigger: null,
+    });
+  };
+
   useEffect(() => {
     const restoreSession = async () => {
       try {
@@ -275,7 +327,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setPushStatusMessage('Expo Go mode: realtime notifications over websocket are enabled.');
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+
+    if (Platform.OS === 'android') {
+      void Notifications.setNotificationChannelAsync('default', {
+        name: 'Default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#2E5BFF',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+    }
+
+    console.info('[Notifications] Local notification channel/handler configured.');
   }, []);
 
   useEffect(() => {
@@ -312,7 +383,13 @@ export default function App() {
           return;
         }
 
-        setPushStatusMessage(formatRoomNotificationMessage(parsed.notification));
+        const notificationMessage = formatRoomNotificationMessage(parsed.notification);
+        console.info('[Notifications] Realtime room notification received', {
+          roomId: parsed.notification.roomId,
+          type: parsed.notification.type,
+          payload: parsed.notification.payload,
+        });
+        void showLocalNotification('Room Notification', notificationMessage);
 
         const activeOpenedRoom = openedRoomRef.current;
         if (activeOpenedRoom && String(parsed.notification.roomId) === String(activeOpenedRoom.id)) {
@@ -324,7 +401,7 @@ export default function App() {
     };
 
     socket.onerror = () => {
-      setPushErrorMessage('Realtime notifications disconnected.');
+      console.error('[Notifications] Realtime notifications disconnected.');
     };
 
     const pingInterval = setInterval(() => {
@@ -1912,8 +1989,6 @@ export default function App() {
 
                 {roomDetailsError ? <Text style={styles.roomsErrorText}>{roomDetailsError}</Text> : null}
                 {roomDetailsStatus ? <Text style={styles.roomsSuccessText}>{roomDetailsStatus}</Text> : null}
-                {pushErrorMessage ? <Text style={styles.roomsErrorText}>{pushErrorMessage}</Text> : null}
-                {pushStatusMessage ? <Text style={styles.roomsSuccessText}>{pushStatusMessage}</Text> : null}
               </ScrollView>
             </>
           ) : (
@@ -1988,8 +2063,6 @@ export default function App() {
 
                 {roomsError ? <Text style={styles.roomsErrorText}>{roomsError}</Text> : null}
                 {roomStatusMessage ? <Text style={styles.roomsSuccessText}>{roomStatusMessage}</Text> : null}
-                {pushErrorMessage ? <Text style={styles.roomsErrorText}>{pushErrorMessage}</Text> : null}
-                {pushStatusMessage ? <Text style={styles.roomsSuccessText}>{pushStatusMessage}</Text> : null}
               </ScrollView>
             </>
           )}
