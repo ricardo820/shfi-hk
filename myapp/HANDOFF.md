@@ -109,14 +109,15 @@
   - Added camera permission handling and scanner modal UX for QR join.
 - **Room settlement actions added**:
   - Added `settle all` button next to `Rooms` title on main rooms page.
-  - Added per-room `settle` button next to each room name in room cards.
+  - Moved single-room `settle` action out of room list and into opened room header (visible only after opening room).
   - Settlement uses REST API room data (`GET /rooms/:roomId/members`, `GET /rooms/:roomId/transactions`) and applies anti-transitive closure across debt chains of any length.
-  - For user debt settlement, app computes minimal net obligations for current user and opens a dummy payment-gate redirect (`Linking.openURL(...)`) before writing settlement transactions.
+  - For user debt settlement, app computes minimal net obligations for current user and opens an in-app dummy payment modal before writing settlement transactions.
+  - Dummy payment gate now explicitly displays payment context and exact amount (`Pay $XX.XX`) with confirm/cancel.
   - Settlement transaction write-back flow:
     - create transaction via `POST /rooms/:roomId/transactions` with owner set to current user
     - assign settlement item to creditor via `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/assign`
     - this creates reverse edges to negate current user debt according to the netted closure.
-  - `settle all` performs one payment-gate redirect for total amount across rooms, then applies settlement write-backs for each payable room.
+  - `settle all` performs one payment-gate confirmation for total amount across rooms, then applies settlement write-backs for each payable room.
 - **Rooms API client expanded** (`src/api.ts`):
   - Added typed methods:
     - `listRooms()`

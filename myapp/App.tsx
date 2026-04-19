@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -217,9 +216,13 @@ export default function App() {
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const [settleLoadingRoomId, setSettleLoadingRoomId] = useState<string | null>(null);
   const [settleAllLoading, setSettleAllLoading] = useState(false);
+  const [isPaymentGateVisible, setPaymentGateVisible] = useState(false);
+  const [paymentGateAmount, setPaymentGateAmount] = useState(0);
+  const [paymentGateContext, setPaymentGateContext] = useState('');
   const liveReceiptCameraRef = useRef<CameraView | null>(null);
   const liveReceiptScanInFlightRef = useRef(false);
   const voiceRecordingRef = useRef<Audio.Recording | null>(null);
+  const paymentGateResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
   const getDefaultAllocations = () =>
     Object.fromEntries(roomMembers.map((member) => [String(member.user.id), '0']));
@@ -819,6 +822,11 @@ export default function App() {
         void recording.stopAndUnloadAsync();
         voiceRecordingRef.current = null;
       }
+
+      if (paymentGateResolverRef.current) {
+        paymentGateResolverRef.current(false);
+        paymentGateResolverRef.current = null;
+      }
     };
   }, []);
 
@@ -995,9 +1003,21 @@ export default function App() {
     return transfers;
   };
 
-  const openDummyPaymentGate = async (totalAmount: number, contextLabel: string) => {
-    const paymentUrl = `https://example.com/dummy-payment-gate?amount=${encodeURIComponent(totalAmount.toFixed(2))}&context=${encodeURIComponent(contextLabel)}`;
-    await Linking.openURL(paymentUrl);
+  const requestDummyPaymentGate = (totalAmount: number, contextLabel: string): Promise<boolean> => {
+    setPaymentGateAmount(Math.max(0, totalAmount));
+    setPaymentGateContext(contextLabel);
+    setPaymentGateVisible(true);
+
+    return new Promise((resolve) => {
+      paymentGateResolverRef.current = resolve;
+    });
+  };
+
+  const resolveDummyPaymentGate = (confirmed: boolean) => {
+    setPaymentGateVisible(false);
+    const resolver = paymentGateResolverRef.current;
+    paymentGateResolverRef.current = null;
+    resolver?.(confirmed);
   };
 
   const applySettlementTransactionsForRoom = async (
@@ -1077,7 +1097,11 @@ export default function App() {
       }
 
       if (!skipPaymentGate) {
-        await openDummyPaymentGate(totalToPay, `settle-room-${room.id}`);
+        const paymentConfirmed = await requestDummyPaymentGate(totalToPay, `Settle ${room.name}`);
+        if (!paymentConfirmed) {
+          setRoomStatusMessage(`Settlement cancelled for ${room.name}.`);
+          return;
+        }
       }
 
       await applySettlementTransactionsForRoom(room.id, currentUserTransfers, memberEmailById);
@@ -1148,7 +1172,11 @@ export default function App() {
         return;
       }
 
-      await openDummyPaymentGate(totalToPay, 'settle-all-rooms');
+      const paymentConfirmed = await requestDummyPaymentGate(totalToPay, 'Settle all rooms');
+      if (!paymentConfirmed) {
+        setRoomStatusMessage('Settle all cancelled.');
+        return;
+      }
 
       for (const roomInput of payableRooms) {
         await applySettlementTransactionsForRoom(
@@ -1602,7 +1630,26 @@ export default function App() {
               >
                 <View style={styles.roomsHeader}>
                   <Text style={styles.roomsHeaderKicker}>Room</Text>
-                  <Text style={styles.roomsHeaderTitleSmall}>{openedRoom.name}</Text>
+                  <View style={styles.roomOpenHeaderRow}>
+                    <Text style={styles.roomsHeaderTitleSmall}>{openedRoom.name}</Text>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.settleButton,
+                        pressed && styles.addRoomButtonPressed,
+                        (settleLoadingRoomId === openedRoom.id || settleAllLoading || roomDetailsLoading) && styles.buttonDisabled,
+                      ]}
+                      onPress={() => {
+                        void settleRoomDebt(openedRoom);
+                      }}
+                      disabled={Boolean(settleLoadingRoomId) || settleAllLoading || roomDetailsLoading}
+                    >
+                      {settleLoadingRoomId === openedRoom.id ? (
+                        <ActivityIndicator color="#EFEFFF" size="small" />
+                      ) : (
+                        <Text style={styles.settleButtonText}>settle</Text>
+                      )}
+                    </Pressable>
+                  </View>
                 </View>
 
                 <View style={styles.debtCard}>
@@ -1784,27 +1831,7 @@ export default function App() {
                             <MaterialIcons name="apartment" size={28} color="#2E5BFF" />
                           </View>
                           <View>
-                            <View style={styles.roomTitleRow}>
-                              <Text style={styles.roomTitle}>{room.name}</Text>
-                              <Pressable
-                                style={({ pressed }) => [
-                                  styles.settleButton,
-                                  pressed && styles.addRoomButtonPressed,
-                                  (settleLoadingRoomId === room.id || settleAllLoading) && styles.buttonDisabled,
-                                ]}
-                                onPress={(event) => {
-                                  event.stopPropagation();
-                                  void settleRoomDebt(room);
-                                }}
-                                disabled={Boolean(settleLoadingRoomId) || settleAllLoading}
-                              >
-                                {settleLoadingRoomId === room.id ? (
-                                  <ActivityIndicator color="#EFEFFF" size="small" />
-                                ) : (
-                                  <Text style={styles.settleButtonText}>settle</Text>
-                                )}
-                              </Pressable>
-                            </View>
+                            <Text style={styles.roomTitle}>{room.name}</Text>
                             <Text style={styles.roomMeta}>Shared Space</Text>
                           </View>
                         </View>
@@ -1831,6 +1858,33 @@ export default function App() {
             </>
           )}
         </View>
+
+        <Modal
+          visible={isPaymentGateVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => resolveDummyPaymentGate(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Dummy Payment Gate</Text>
+              <Text style={styles.paymentGateText}>{paymentGateContext}</Text>
+              <Text style={styles.paymentGateAmount}>Pay ${paymentGateAmount.toFixed(2)}</Text>
+              <Pressable
+                style={({ pressed }) => [styles.modalPrimaryButton, pressed && styles.modalOptionPressed]}
+                onPress={() => resolveDummyPaymentGate(true)}
+              >
+                <Text style={styles.modalPrimaryText}>Confirm Payment</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalCancelButton, pressed && styles.modalOptionPressed]}
+                onPress={() => resolveDummyPaymentGate(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
         <Modal
           visible={isInviteModalVisible}
@@ -2607,11 +2661,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.5,
   },
-  roomTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   settleButton: {
     borderRadius: 10,
     backgroundColor: '#2E5BFF',
@@ -2626,6 +2675,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     textTransform: 'lowercase',
+  },
+  paymentGateText: {
+    color: '#C4C5D9',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  paymentGateAmount: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    marginBottom: 4,
   },
   roomMeta: {
     marginTop: 3,
@@ -2714,6 +2775,12 @@ const styles = StyleSheet.create({
     color: '#E5E2E3',
     fontSize: 14,
     fontWeight: '600',
+  },
+  roomOpenHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   roomsHeaderTitleSmall: {
     color: '#FFFFFF',
