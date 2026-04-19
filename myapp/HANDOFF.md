@@ -129,6 +129,8 @@
   - Debt notification actor rule update:
     - debt notifications are now published by the creditor (user who is owed), not by the debtor
     - settlement write-back flow no longer publishes `debt_pushed` from debtor context.
+  - Server contract alignment update:
+    - debt reminder publishing now uses preferred `fromUserIds` payload field (one debtor per request in current client flow), with `toUserId` set to the creditor.
   - Notification UX update:
     - removed inline notification status/error texts from home/room screens
     - notification lifecycle is now logged to console (connect, receive, disconnect, publish errors).

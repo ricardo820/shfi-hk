@@ -206,7 +206,8 @@ export interface PublishTransactionAddedNotificationResponse {
 }
 
 export interface PublishDebtPushedNotificationPayload {
-  fromUserId: number;
+  fromUserIds?: number[];
+  fromUserId?: number;
   toUserId: number;
   amount: number;
   currency: string;

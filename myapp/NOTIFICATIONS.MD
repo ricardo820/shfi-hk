@@ -88,7 +88,7 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
 - Body:
 ```json
 {
-  "fromUserId": 2,
+  "fromUserIds": [2, 3],
   "toUserId": 1,
   "amount": 14.5,
   "currency": "EUR",
@@ -98,9 +98,13 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
 
 ### Rules
 - requester must be a room member
-- `fromUserId` and `toUserId` must be room members
+- all debtor user ids (`fromUserIds`) and `toUserId` must be room members
 - only the user who is owed (`toUserId`) can publish this event
-- notification is delivered to all room members
+- notification is delivered only to debtor users in `fromUserIds`
+
+### Notes
+- Backward compatibility: `fromUserId` (single debtor) is still accepted.
+- Preferred payload for client app is `fromUserIds`.
 
 ### Success (`201`)
 ```json
@@ -112,7 +116,7 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
     "type": "debt_pushed",
     "actorUserId": "2",
     "payload": {
-      "fromUserId": 2,
+      "fromUserIds": [2, 3],
       "toUserId": 1,
       "amount": 14.5,
       "currency": "EUR",
@@ -120,7 +124,7 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
     },
     "createdAt": "2026-04-19T..."
   },
-  "recipientIds": [1, 2, 3]
+  "recipientIds": [2, 3]
 }
 ```
 
