@@ -107,6 +107,16 @@
   - Create flow submits to `POST /rooms` and refreshes room list on success.
   - Join flow uses device camera QR scanning and submits scanned invite code to `POST /rooms/join`, then refreshes list.
   - Added camera permission handling and scanner modal UX for QR join.
+- **Room settlement actions added**:
+  - Added `settle all` button next to `Rooms` title on main rooms page.
+  - Added per-room `settle` button next to each room name in room cards.
+  - Settlement uses REST API room data (`GET /rooms/:roomId/members`, `GET /rooms/:roomId/transactions`) and applies anti-transitive closure across debt chains of any length.
+  - For user debt settlement, app computes minimal net obligations for current user and opens a dummy payment-gate redirect (`Linking.openURL(...)`) before writing settlement transactions.
+  - Settlement transaction write-back flow:
+    - create transaction via `POST /rooms/:roomId/transactions` with owner set to current user
+    - assign settlement item to creditor via `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/assign`
+    - this creates reverse edges to negate current user debt according to the netted closure.
+  - `settle all` performs one payment-gate redirect for total amount across rooms, then applies settlement write-backs for each payable room.
 - **Rooms API client expanded** (`src/api.ts`):
   - Added typed methods:
     - `listRooms()`
@@ -186,3 +196,4 @@ Current working environment is Linux. Standard `npm`/`npx` usage is expected.
 - Revisit fallback path after standardizing runtime (Node/Expo target) for Mindee SDK-only operation.
 - Add API/integration tests for transaction allocation flows (`take` + `assign`) and both OCR-prefill flows (single-capture + live-scan).
 - Add input validation guardrails for parsed voice receipts (e.g., reject suspiciously large prices/counts before prefill).
+- Add explicit post-payment callback handling (instead of fire-and-continue dummy redirect) once real payment integration is available.

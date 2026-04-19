@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -65,6 +66,12 @@ type VoiceAwareReceiptItem = ReceiptScanResult['items'][number] & {
 
 type VoiceAwareReceipt = Omit<ReceiptScanResult, 'items'> & {
   items: VoiceAwareReceiptItem[];
+};
+
+type SettlementTransfer = {
+  debtorId: string;
+  creditorId: string;
+  amount: number;
 };
 
 const STORAGE_KEYS = {
@@ -208,6 +215,8 @@ export default function App() {
   const [isVoiceProcessing, setVoiceProcessing] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState('');
   const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [settleLoadingRoomId, setSettleLoadingRoomId] = useState<string | null>(null);
+  const [settleAllLoading, setSettleAllLoading] = useState(false);
   const liveReceiptCameraRef = useRef<CameraView | null>(null);
   const liveReceiptScanInFlightRef = useRef(false);
   const voiceRecordingRef = useRef<Audio.Recording | null>(null);
@@ -839,17 +848,10 @@ export default function App() {
     });
   };
 
-  const computeRoomDebt = () => {
-    if (!authenticatedUser) {
-      return {
-        userDebt: 0,
-        owedToUser: 0,
-      };
-    }
-
-    const currentUserId = String(authenticatedUser.id);
-    const roomMemberIds = Array.from(new Set(roomMembers.map((member) => String(member.user.id))));
-
+  const buildSettlementTransfers = (
+    transactions: RoomTransaction[],
+    memberIds: string[]
+  ): SettlementTransfer[] => {
     const rawLedger = new Map<string, Map<string, number>>();
 
     const getEdgeAmount = (debtorId: string, creditorId: string): number => {
@@ -880,11 +882,10 @@ export default function App() {
         return;
       }
 
-      const previousAmount = getEdgeAmount(debtorId, creditorId);
-      setEdgeAmount(debtorId, creditorId, previousAmount + amount);
+      setEdgeAmount(debtorId, creditorId, getEdgeAmount(debtorId, creditorId) + amount);
     };
 
-    roomTransactions.forEach((transaction) => {
+    transactions.forEach((transaction) => {
       const ownerUserId = String(transaction.owner.userId);
 
       transaction.items.forEach((item) => {
@@ -917,9 +918,7 @@ export default function App() {
           return;
         }
 
-        const participants = roomMemberIds.length > 0
-          ? roomMemberIds
-          : Array.from(new Set([ownerUserId, currentUserId]));
+        const participants = memberIds.length > 0 ? memberIds : [ownerUserId];
         const participantCount = Math.max(participants.length, 1);
         const communalShare = (remainingCount * item.unitPrice) / participantCount;
 
@@ -950,7 +949,7 @@ export default function App() {
       });
     });
 
-    roomMemberIds.forEach((memberId) => {
+    memberIds.forEach((memberId) => {
       if (!balanceByUser.has(memberId)) {
         balanceByUser.set(memberId, 0);
       }
@@ -964,23 +963,21 @@ export default function App() {
       .filter(([, balance]) => balance > 1e-9)
       .map(([userId, balance]) => ({ userId, amount: balance }));
 
+    const transfers: SettlementTransfer[] = [];
     let debtorIndex = 0;
     let creditorIndex = 0;
-
-    let userDebt = 0;
-    let owedToUser = 0;
 
     while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
       const debtor = debtors[debtorIndex];
       const creditor = creditors[creditorIndex];
       const settledAmount = Math.min(debtor.amount, creditor.amount);
 
-      if (debtor.userId === currentUserId && creditor.userId !== currentUserId) {
-        userDebt += settledAmount;
-      }
-
-      if (creditor.userId === currentUserId && debtor.userId !== currentUserId) {
-        owedToUser += settledAmount;
+      if (settledAmount > 1e-9 && debtor.userId !== creditor.userId) {
+        transfers.push({
+          debtorId: debtor.userId,
+          creditorId: creditor.userId,
+          amount: settledAmount,
+        });
       }
 
       debtor.amount -= settledAmount;
@@ -994,6 +991,214 @@ export default function App() {
         creditorIndex += 1;
       }
     }
+
+    return transfers;
+  };
+
+  const openDummyPaymentGate = async (totalAmount: number, contextLabel: string) => {
+    const paymentUrl = `https://example.com/dummy-payment-gate?amount=${encodeURIComponent(totalAmount.toFixed(2))}&context=${encodeURIComponent(contextLabel)}`;
+    await Linking.openURL(paymentUrl);
+  };
+
+  const applySettlementTransactionsForRoom = async (
+    roomId: string,
+    currentUserTransfers: SettlementTransfer[],
+    memberEmailById: Map<string, string>
+  ) => {
+    if (!authenticatedUser) {
+      return;
+    }
+
+    for (const transfer of currentUserTransfers) {
+      const creditorUserId = Number(transfer.creditorId);
+      if (!Number.isFinite(creditorUserId)) {
+        continue;
+      }
+
+      const creditorEmail = memberEmailById.get(transfer.creditorId) ?? `User ${transfer.creditorId}`;
+      const amount = Number(transfer.amount.toFixed(2));
+
+      const created = await createRoomTransaction(roomId, {
+        companyName: 'Debt Settlement',
+        ownerUserId: authenticatedUser.id,
+        items: [
+          {
+            itemName: `Settlement payment to ${creditorEmail}`,
+            itemCount: 1,
+            unitPrice: amount,
+          },
+        ],
+      });
+
+      const settlementItemId = created.transaction.items[0]?.id;
+      if (!settlementItemId) {
+        continue;
+      }
+
+      await assignRoomTransactionItem(roomId, created.transaction.id, settlementItemId, {
+        userId: creditorUserId,
+        quantity: 1,
+      });
+    }
+  };
+
+  const settleRoomDebt = async (room: Room, skipPaymentGate = false) => {
+    if (!authenticatedUser) {
+      return;
+    }
+
+    try {
+      setRoomsError('');
+      setRoomStatusMessage('');
+      setSettleLoadingRoomId(room.id);
+
+      const [membersResponse, transactionsResponse] = await Promise.all([
+        listRoomMembers(room.id),
+        listRoomTransactions(room.id),
+      ]);
+
+      const members = membersResponse.members ?? [];
+      const transactions = transactionsResponse.transactions ?? [];
+      const memberIds = members.map((member) => String(member.user.id));
+      const memberEmailById = new Map(
+        members.map((member) => [String(member.user.id), member.user.email])
+      );
+
+      const transfers = buildSettlementTransfers(transactions, memberIds);
+      const currentUserTransfers = transfers.filter(
+        (transfer) => transfer.debtorId === String(authenticatedUser.id)
+      );
+
+      const totalToPay = currentUserTransfers.reduce((sum, transfer) => sum + transfer.amount, 0);
+
+      if (totalToPay <= 1e-9) {
+        setRoomStatusMessage(`Nothing to settle for ${room.name}.`);
+        return;
+      }
+
+      if (!skipPaymentGate) {
+        await openDummyPaymentGate(totalToPay, `settle-room-${room.id}`);
+      }
+
+      await applySettlementTransactionsForRoom(room.id, currentUserTransfers, memberEmailById);
+
+      if (openedRoom?.id === room.id) {
+        await fetchRoomDetails(room);
+      }
+
+      setRoomStatusMessage(`Settled ${room.name} for $${totalToPay.toFixed(2)}.`);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : `Unable to settle ${room.name} right now.`;
+        setRoomsError(message);
+      } else {
+        setRoomsError(`Unable to settle ${room.name} right now.`);
+      }
+    } finally {
+      setSettleLoadingRoomId(null);
+      await fetchRooms();
+    }
+  };
+
+  const settleAllRoomsDebt = async () => {
+    if (!authenticatedUser || rooms.length === 0) {
+      return;
+    }
+
+    try {
+      setRoomsError('');
+      setRoomStatusMessage('');
+      setSettleAllLoading(true);
+
+      const roomSettlementInputs = await Promise.all(
+        rooms.map(async (room) => {
+          const [membersResponse, transactionsResponse] = await Promise.all([
+            listRoomMembers(room.id),
+            listRoomTransactions(room.id),
+          ]);
+
+          const members = membersResponse.members ?? [];
+          const transactions = transactionsResponse.transactions ?? [];
+          const memberIds = members.map((member) => String(member.user.id));
+          const memberEmailById = new Map(
+            members.map((member) => [String(member.user.id), member.user.email])
+          );
+          const transfers = buildSettlementTransfers(transactions, memberIds);
+          const currentUserTransfers = transfers.filter(
+            (transfer) => transfer.debtorId === String(authenticatedUser.id)
+          );
+
+          return {
+            room,
+            memberEmailById,
+            currentUserTransfers,
+            totalToPay: currentUserTransfers.reduce((sum, transfer) => sum + transfer.amount, 0),
+          };
+        })
+      );
+
+      const payableRooms = roomSettlementInputs.filter((input) => input.totalToPay > 1e-9);
+      const totalToPay = payableRooms.reduce((sum, input) => sum + input.totalToPay, 0);
+
+      if (totalToPay <= 1e-9) {
+        setRoomStatusMessage('Nothing to settle across your rooms.');
+        return;
+      }
+
+      await openDummyPaymentGate(totalToPay, 'settle-all-rooms');
+
+      for (const roomInput of payableRooms) {
+        await applySettlementTransactionsForRoom(
+          roomInput.room.id,
+          roomInput.currentUserTransfers,
+          roomInput.memberEmailById
+        );
+      }
+
+      if (openedRoom) {
+        const refreshedRoom = rooms.find((room) => room.id === openedRoom.id) ?? openedRoom;
+        await fetchRoomDetails(refreshedRoom);
+      }
+
+      setRoomStatusMessage(`Settled all rooms for $${totalToPay.toFixed(2)}.`);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const message =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : 'Unable to settle all rooms right now.';
+        setRoomsError(message);
+      } else {
+        setRoomsError('Unable to settle all rooms right now.');
+      }
+    } finally {
+      setSettleAllLoading(false);
+      await fetchRooms();
+    }
+  };
+
+  const computeRoomDebt = () => {
+    if (!authenticatedUser) {
+      return {
+        userDebt: 0,
+        owedToUser: 0,
+      };
+    }
+
+    const currentUserId = String(authenticatedUser.id);
+    const roomMemberIds = Array.from(new Set(roomMembers.map((member) => String(member.user.id))));
+    const transfers = buildSettlementTransfers(roomTransactions, roomMemberIds);
+
+    const userDebt = transfers
+      .filter((transfer) => transfer.debtorId === currentUserId && transfer.creditorId !== currentUserId)
+      .reduce((sum, transfer) => sum + transfer.amount, 0);
+
+    const owedToUser = transfers
+      .filter((transfer) => transfer.creditorId === currentUserId && transfer.debtorId !== currentUserId)
+      .reduce((sum, transfer) => sum + transfer.amount, 0);
 
     const nettedDebt = Math.max(0, userDebt - owedToUser);
     const nettedOwedToUser = nettedDebt === 0 ? Math.max(0, owedToUser - userDebt) : 0;
@@ -1533,7 +1738,26 @@ export default function App() {
             <>
               <View style={styles.roomsHeader}>
                 <Text style={styles.roomsHeaderKicker}>Management</Text>
-                <Text style={styles.roomsHeaderTitle}>Rooms</Text>
+                <View style={styles.roomsHeaderTitleRow}>
+                  <Text style={styles.roomsHeaderTitle}>Rooms</Text>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.settleButton,
+                      pressed && styles.addRoomButtonPressed,
+                      settleAllLoading && styles.buttonDisabled,
+                    ]}
+                    onPress={() => {
+                      void settleAllRoomsDebt();
+                    }}
+                    disabled={settleAllLoading || settleLoadingRoomId !== null || roomsLoading}
+                  >
+                    {settleAllLoading ? (
+                      <ActivityIndicator color="#EFEFFF" size="small" />
+                    ) : (
+                      <Text style={styles.settleButtonText}>settle all</Text>
+                    )}
+                  </Pressable>
+                </View>
               </View>
 
               <ScrollView
@@ -1560,7 +1784,27 @@ export default function App() {
                             <MaterialIcons name="apartment" size={28} color="#2E5BFF" />
                           </View>
                           <View>
-                            <Text style={styles.roomTitle}>{room.name}</Text>
+                            <View style={styles.roomTitleRow}>
+                              <Text style={styles.roomTitle}>{room.name}</Text>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.settleButton,
+                                  pressed && styles.addRoomButtonPressed,
+                                  (settleLoadingRoomId === room.id || settleAllLoading) && styles.buttonDisabled,
+                                ]}
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  void settleRoomDebt(room);
+                                }}
+                                disabled={Boolean(settleLoadingRoomId) || settleAllLoading}
+                              >
+                                {settleLoadingRoomId === room.id ? (
+                                  <ActivityIndicator color="#EFEFFF" size="small" />
+                                ) : (
+                                  <Text style={styles.settleButtonText}>settle</Text>
+                                )}
+                              </Pressable>
+                            </View>
                             <Text style={styles.roomMeta}>Shared Space</Text>
                           </View>
                         </View>
@@ -2304,6 +2548,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -1,
   },
+  roomsHeaderTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   roomsScroll: {
     flex: 1,
   },
@@ -2356,6 +2606,26 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     letterSpacing: -0.5,
+  },
+  roomTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  settleButton: {
+    borderRadius: 10,
+    backgroundColor: '#2E5BFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 66,
+  },
+  settleButtonText: {
+    color: '#EFEFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'lowercase',
   },
   roomMeta: {
     marginTop: 3,
