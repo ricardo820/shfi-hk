@@ -19,8 +19,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
@@ -47,15 +45,6 @@ import {
   updateRoomTransaction,
   User,
 } from './src/api';
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
 
 type AuthMode = 'login' | 'register';
 
@@ -225,7 +214,6 @@ export default function App() {
   const voiceRecordingRef = useRef<Audio.Recording | null>(null);
   const paymentGateResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const notificationsSocketRef = useRef<WebSocket | null>(null);
-  const notificationReceivedListener = useRef<Notifications.EventSubscription | null>(null);
   const openedRoomRef = useRef<Room | null>(null);
 
   const getDefaultAllocations = () =>
@@ -287,50 +275,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const registerForPushNotifications = async () => {
-      try {
-        setPushErrorMessage('');
-
-        if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'Default',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#2E5BFF',
-            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-          });
-        }
-
-        const existingStatus = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus.status;
-
-        if (finalStatus !== 'granted') {
-          const requested = await Notifications.requestPermissionsAsync();
-          finalStatus = requested.status;
-        }
-
-        if (finalStatus !== 'granted') {
-          setPushErrorMessage('Push notification permissions were not granted.');
-          return;
-        }
-
-        if (!Device.isDevice) {
-          setPushStatusMessage('Push registration requires a physical device.');
-          return;
-        }
-
-        try {
-          const tokenResponse = await Notifications.getExpoPushTokenAsync();
-          setPushStatusMessage(`Device registered for notifications (${tokenResponse.data.slice(0, 14)}...).`);
-        } catch {
-          setPushStatusMessage('Notification permissions granted. Device registration completed.');
-        }
-      } catch {
-        setPushErrorMessage('Unable to register device for notifications.');
-      }
-    };
-
-    void registerForPushNotifications();
+    setPushStatusMessage('Expo Go mode: realtime notifications over websocket are enabled.');
   }, []);
 
   useEffect(() => {
@@ -367,15 +312,7 @@ export default function App() {
           return;
         }
 
-        void Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Room Notification',
-            body: formatRoomNotificationMessage(parsed.notification),
-            sound: 'default',
-            priority: Notifications.AndroidNotificationPriority.MAX,
-          },
-          trigger: null,
-        });
+        setPushStatusMessage(formatRoomNotificationMessage(parsed.notification));
 
         const activeOpenedRoom = openedRoomRef.current;
         if (activeOpenedRoom && String(parsed.notification.roomId) === String(activeOpenedRoom.id)) {
@@ -404,20 +341,6 @@ export default function App() {
       socket.close();
     };
   }, [sessionToken, authenticatedUser]);
-
-  useEffect(() => {
-    notificationReceivedListener.current = Notifications.addNotificationReceivedListener(() => {
-      const activeOpenedRoom = openedRoomRef.current;
-      if (activeOpenedRoom) {
-        void fetchRoomDetails(activeOpenedRoom);
-      }
-    });
-
-    return () => {
-      notificationReceivedListener.current?.remove();
-      notificationReceivedListener.current = null;
-    };
-  }, []);
 
   const primaryButtonLabel = useMemo(
     () => (mode === 'login' ? 'Sign In' : 'Register'),
