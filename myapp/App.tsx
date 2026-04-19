@@ -19,7 +19,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
-import * as ImagePicker from 'expo-image-picker';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
@@ -85,7 +84,7 @@ function BottomNavBar({
   onSelect,
 }: {
   activeKey: NavItemKey;
-  onSelect: (key: NavItemKey | 'add') => void;
+  onSelect: (key: NavItemKey) => void;
 }) {
   return (
     <View style={styles.bottomNavShell}>
@@ -102,21 +101,6 @@ function BottomNavBar({
           color={activeKey === 'home' ? '#E5E2E3' : '#737373'}
         />
         <Text style={[styles.navLabel, activeKey === 'home' ? styles.navLabelActive : styles.navLabelInactive]}>HOME</Text>
-      </Pressable>
-
-      <Pressable
-        style={({ pressed }) => [
-          styles.navItemAddContainer,
-          pressed && styles.navItemPressed,
-        ]}
-        onPress={() => onSelect('add')}
-      >
-        <MaterialIcons
-          name="add"
-          size={24}
-          color="#3B82F6"
-        />
-        <Text style={styles.navLabelAdd}>ADD</Text>
       </Pressable>
 
       <Pressable
@@ -344,12 +328,7 @@ export default function App() {
     setMode('login');
   };
 
-  const onNavSelect = (key: NavItemKey | 'add') => {
-    if (key === 'add') {
-      setAddRoomModalVisible(true);
-      return;
-    }
-
+  const onNavSelect = (key: NavItemKey) => {
     if (key === 'home') {
       setActiveNav('home');
       setOpenedRoom(null);
@@ -417,12 +396,17 @@ export default function App() {
     field: keyof TransactionFormItem,
     value: string
   ) => {
+    let normalizedValue = value;
+    if (field === 'unitPrice') {
+      normalizedValue = value.replace(',', '.');
+    }
+
     setTransactionItems((previousItems) =>
       previousItems.map((item, itemIndex) =>
         itemIndex === index
           ? {
             ...item,
-            [field]: value,
+            [field]: normalizedValue,
           }
           : item
       )
@@ -504,64 +488,6 @@ export default function App() {
     setAddTransactionModalVisible(true);
   };
 
-  const openScanReceiptTransactionModal = async () => {
-    try {
-      console.info('[ReceiptScan] Single scan started');
-      setRoomActionLoading(true);
-      setRoomDetailsError('');
-      setRoomDetailsStatus('');
-
-      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permissionResult.granted) {
-        setRoomDetailsError('Camera permission is required to scan a receipt.');
-        return;
-      }
-
-      const captureResult = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.9,
-      });
-
-      if (captureResult.canceled || captureResult.assets.length === 0) {
-        return;
-      }
-
-      const receiptAsset = captureResult.assets[0];
-      const parsedReceipt = await scanReceiptWithMindee(
-        receiptAsset.uri,
-        receiptAsset.mimeType ?? 'image/jpeg'
-      );
-
-      console.info('[ReceiptScan] Single scan completed', {
-        companyName: parsedReceipt.companyName,
-        itemCount: parsedReceipt.items.length,
-        totalAmount: parsedReceipt.totalAmount,
-      });
-
-      fillTransactionFromReceipt(parsedReceipt);
-      setAddTransactionModalVisible(true);
-      setRoomDetailsStatus('Receipt scanned. Review parsed items and save transaction.');
-    } catch (error) {
-      console.error('[ReceiptScan] Single scan failed', {
-        isAxiosError: axios.isAxiosError(error),
-        message: error instanceof Error ? error.message : String(error),
-        axiosStatus: axios.isAxiosError(error) ? error.response?.status : undefined,
-        axiosData: axios.isAxiosError(error) ? error.response?.data : undefined,
-      });
-
-      if (axios.isAxiosError(error)) {
-        const message =
-          typeof error.response?.data?.message === 'string'
-            ? error.response.data.message
-            : 'Unable to scan receipt right now.';
-        setRoomDetailsError(message);
-      } else {
-        setRoomDetailsError('Unable to scan receipt right now.');
-      }
-    } finally {
-      setRoomActionLoading(false);
-    }
-  };
 
   const openLiveReceiptScanner = async () => {
     setRoomDetailsError('');
@@ -1682,16 +1608,7 @@ export default function App() {
                     <MaterialIcons name="add-circle" size={20} color="#B8C3FF" />
                     <Text style={styles.roomActionText}>Add Transaction</Text>
                   </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
-                    onPress={() => {
-                      void openScanReceiptTransactionModal();
-                    }}
-                    disabled={roomActionLoading}
-                  >
-                    <MaterialIcons name="receipt-long" size={20} color="#B8C3FF" />
-                    <Text style={styles.roomActionText}>Scan Receipt</Text>
-                  </Pressable>
+
                   <Pressable
                     style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
                     onPress={() => {
@@ -1703,7 +1620,11 @@ export default function App() {
                     <Text style={styles.roomActionText}>Live Receipt Scan</Text>
                   </Pressable>
                   <Pressable
-                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
+                    style={({ pressed }) => [
+                      styles.roomActionButton,
+                      pressed && styles.addRoomButtonPressed,
+                      { flexBasis: '100%', flexDirection: 'row', paddingVertical: 14, gap: 8 },
+                    ]}
                     onPress={openVoiceTransactionModal}
                     disabled={roomActionLoading}
                   >
@@ -1988,15 +1909,18 @@ export default function App() {
                           onChangeText={(value) => updateTransactionItem(index, 'itemCount', value)}
                           editable={!roomActionLoading}
                         />
-                        <TextInput
-                          placeholder="Unit price"
-                          placeholderTextColor="#8E90A2"
-                          style={[styles.modalInput, styles.txInputHalf]}
-                          keyboardType="decimal-pad"
-                          value={item.unitPrice}
-                          onChangeText={(value) => updateTransactionItem(index, 'unitPrice', value)}
-                          editable={!roomActionLoading}
-                        />
+                        <View style={[styles.modalInput, styles.txInputHalf, { flexDirection: 'row', alignItems: 'center' }]}>
+                          <Text style={{ color: '#8E90A2', marginRight: 4 }}>$</Text>
+                          <TextInput
+                            placeholder="Unit price"
+                            placeholderTextColor="#8E90A2"
+                            style={{ flex: 1, color: '#FFFFFF', fontSize: 14, paddingVertical: 0 }}
+                            keyboardType="decimal-pad"
+                            value={item.unitPrice}
+                            onChangeText={(value) => updateTransactionItem(index, 'unitPrice', value)}
+                            editable={!roomActionLoading}
+                          />
+                        </View>
                       </View>
                       <Text style={styles.itemAssignLabel}>Assign quantities by user</Text>
                       <View style={styles.allocationsList}>
@@ -2830,7 +2754,7 @@ const styles = StyleSheet.create({
   },
   roomActionButton: {
     flexGrow: 1,
-    flexBasis: '31%',
+    flexBasis: '48%',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#353436',
@@ -2946,10 +2870,10 @@ const styles = StyleSheet.create({
   },
   txInputRow: {
     flexDirection: 'row',
+    gap: 10,
   },
   txInputHalf: {
     flex: 1,
-    gap: 8,
   },
   restoreText: {
     color: '#C4C5D9',
