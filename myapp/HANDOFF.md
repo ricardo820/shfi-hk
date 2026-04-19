@@ -126,6 +126,9 @@
   - Transaction create flow now publishes `transaction_added` notification after successful room transaction creation.
   - Settlement flow now publishes `debt_pushed` notifications after debtor confirms payment and settlement write-back is applied.
   - Added opened-room header `notify` button (visible when current user is net creditor in that room) to send debt notifications to server for outstanding debtor links.
+  - Debt notification actor rule update:
+    - debt notifications are now published by the creditor (user who is owed), not by the debtor
+    - settlement write-back flow no longer publishes `debt_pushed` from debtor context.
   - Notification UX update:
     - removed inline notification status/error texts from home/room screens
     - notification lifecycle is now logged to console (connect, receive, disconnect, publish errors).

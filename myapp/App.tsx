@@ -1168,17 +1168,6 @@ export default function App() {
         quantity: 1,
       });
 
-      try {
-        await publishDebtPushedNotification(roomId, {
-          fromUserId: authenticatedUser.id,
-          toUserId: creditorUserId,
-          amount,
-          currency: 'EUR',
-          note: 'Debt settled via payment gate',
-        });
-      } catch (notificationError) {
-        console.warn('[Notifications] Failed to publish debt-pushed notification', notificationError);
-      }
     }
   };
 
@@ -1351,11 +1340,11 @@ export default function App() {
       await Promise.all(
         receivableTransfers.map((transfer) =>
           publishDebtPushedNotification(openedRoom.id, {
-            fromUserId: Number(transfer.debtorId),
-            toUserId: authenticatedUser.id,
+            fromUserId: authenticatedUser.id,
+            toUserId: Number(transfer.debtorId),
             amount: Number(transfer.amount.toFixed(2)),
             currency: 'EUR',
-            note: 'Debt reminder notification',
+            note: 'Debt reminder sent by creditor',
           })
         )
       );

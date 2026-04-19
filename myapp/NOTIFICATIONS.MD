@@ -99,7 +99,7 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
 ### Rules
 - requester must be a room member
 - `fromUserId` and `toUserId` must be room members
-- only the debtor (`fromUserId`) can publish this event
+- only the user who is owed (`toUserId`) can publish this event
 - notification is delivered to all room members
 
 ### Success (`201`)
@@ -168,7 +168,7 @@ Use WebSocket from React Native / Expo (`WebSocket` is supported natively).
 
 ## Client integration notes
 1. After creating transaction, call `POST /rooms/:roomId/notifications/transaction-added`.
-2. When debtor confirms payment push, call `POST /rooms/:roomId/notifications/debt-pushed`.
+2. When owed user confirms debt push, call `POST /rooms/:roomId/notifications/debt-pushed`.
 3. Maintain one websocket connection for logged-in user and append incoming `room_notification` events to local store.
 4. Use `GET /rooms/:roomId/notifications` only for initial hydration or reconnect recovery.
 5. Render by `type` and use `payload` fields to build message text.
