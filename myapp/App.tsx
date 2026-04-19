@@ -1229,7 +1229,7 @@ export default function App() {
       <View style={styles.homeScreen}>
         <ActivityIndicator color="#B8C3FF" />
         <Text style={styles.restoreText}>Restoring session...</Text>
-        <StatusBar hidden style="light" />
+        <StatusBar style="light" />
       </View>
     );
   }
@@ -1917,7 +1917,7 @@ export default function App() {
         </Modal>
 
         <BottomNavBar activeKey={activeNav} onSelect={onNavSelect} />
-        <StatusBar hidden style="light" />
+        <StatusBar style="light" />
       </SafeAreaView>
     );
   }
@@ -2015,7 +2015,7 @@ export default function App() {
         </View>
       </View>
 
-      <StatusBar hidden style="light" />
+      <StatusBar style="light" />
     </KeyboardAvoidingView>
   );
 }
@@ -2162,7 +2162,7 @@ const styles = StyleSheet.create({
   roomsContentWrap: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingTop: 80,
+    paddingTop: 20,
     paddingBottom: 104,
   },
   roomsHeader: {
@@ -2489,10 +2489,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   topNavShell: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
     height: 64,
     flexDirection: 'row',
     alignItems: 'center',

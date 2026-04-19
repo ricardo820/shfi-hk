@@ -42,8 +42,6 @@
   - Implemented `TopNavBar` based on `topbar_ui.html` design, featuring a mail icon, central profile logo, and dynamic right-side branding.
   - Integrated into authenticated layouts to ensure a consistent app-wide shell.
   - Automatically extracts and displays the logged-in user's first name, defaulting back to "SHFI" when the user is logged out.
-- **System UI adjustments**:
-  - The OS status bar is now completely hidden (`<StatusBar hidden />`) across all screens for a fully immersive, edge-to-edge experience.
 - **Rooms screen implemented as default logged-in page**:
   - Replaced temporary authenticated homepage with a Rooms list screen in `App.tsx`.
   - Screen follows `rooms_ui_example.html` visual direction (dark glass cards, heading, CTA patterns).
