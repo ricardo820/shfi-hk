@@ -214,6 +214,7 @@ export default function App() {
   const paymentGateResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const notificationsSocketRef = useRef<WebSocket | null>(null);
   const openedRoomRef = useRef<Room | null>(null);
+  const nativeNotificationPermissionRef = useRef(false);
 
   const getDefaultAllocations = () =>
     Object.fromEntries(roomMembers.map((member) => [String(member.user.id), '0']));
@@ -272,6 +273,23 @@ export default function App() {
     return permission === 'granted';
   };
 
+  const ensureNativeNotificationPermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'web') {
+      return false;
+    }
+
+    const currentPermissions = await Notifications.getPermissionsAsync();
+    if (currentPermissions.granted || currentPermissions.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL) {
+      nativeNotificationPermissionRef.current = true;
+      return true;
+    }
+
+    const requested = await Notifications.requestPermissionsAsync();
+    const granted = requested.granted || requested.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+    nativeNotificationPermissionRef.current = granted;
+    return granted;
+  };
+
   const showLocalNotification = async (title: string, body: string) => {
     if (Platform.OS === 'web') {
       const canNotify = await ensureWebNotificationPermission();
@@ -283,6 +301,12 @@ export default function App() {
       if (notificationApi) {
         new notificationApi(title, { body });
       }
+      return;
+    }
+
+    const canNotify = nativeNotificationPermissionRef.current || await ensureNativeNotificationPermission();
+    if (!canNotify) {
+      console.info('[Notifications] Native notification permission not granted.');
       return;
     }
 
@@ -343,6 +367,16 @@ export default function App() {
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2E5BFF',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+    }
+
+    if (Platform.OS !== 'web') {
+      void ensureNativeNotificationPermission().then((granted) => {
+        console.info(
+          granted
+            ? '[Notifications] Native notification permission granted.'
+            : '[Notifications] Native notification permission not granted.'
+        );
       });
     }
 
