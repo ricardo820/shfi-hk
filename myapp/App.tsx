@@ -1760,7 +1760,6 @@ export default function App() {
                           </View>
                           <View>
                             <Text style={styles.roomTitle}>{room.name}</Text>
-                            <Text style={styles.roomMeta}>Shared Space</Text>
                           </View>
                         </View>
                         <MaterialIcons name="chevron-right" size={24} color="#5D5F6B" />
@@ -2618,14 +2617,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.6,
     marginBottom: 4,
-  },
-  roomMeta: {
-    marginTop: 3,
-    color: '#778',
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
   },
   addRoomButton: {
     marginTop: 18,
