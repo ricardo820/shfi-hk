@@ -38,6 +38,10 @@
   - The `Add` button uses a distinct blue background and triggers the Add Room modal directly from the navbar.
   - Re-mapped the old `Profile` route to the new `Settings` item, preserving the profile and logout view.
   - The bottom navbar is only rendered on authenticated pages.
+  - Safe-area overlap fix added for devices with system navigation controls:
+    - bottom navbar now uses runtime safe-area inset for bottom offset/padding
+    - authenticated content container bottom padding now includes bottom inset
+    - prevents Android home/back/menu system buttons from obscuring the app navbar.
 - **Top navigation added across the app**:
   - Implemented `TopNavBar` based on `topbar_ui.html` design, featuring a mail icon, central profile logo, and dynamic right-side branding.
   - Integrated into authenticated layouts to ensure a consistent app-wide shell.

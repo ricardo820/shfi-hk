@@ -21,6 +21,7 @@ import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-ca
 import { Audio } from 'expo-av';
 import * as Notifications from 'expo-notifications';
 import QRCode from 'react-native-qrcode-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import axios from 'axios';
 import {
   buildReceiptFromVoiceWithOpenAI,
@@ -85,12 +86,22 @@ type NavItemKey = 'home' | 'settings';
 function BottomNavBar({
   activeKey,
   onSelect,
+  bottomInset,
 }: {
   activeKey: NavItemKey;
   onSelect: (key: NavItemKey) => void;
+  bottomInset: number;
 }) {
   return (
-    <View style={styles.bottomNavShell}>
+    <View
+      style={[
+        styles.bottomNavShell,
+        {
+          bottom: Math.max(bottomInset, 8),
+          paddingBottom: 16 + Math.max(bottomInset, 0),
+        },
+      ]}
+    >
       <Pressable
         style={({ pressed }) => [
           styles.navItem,
@@ -153,6 +164,7 @@ function TopNavBar({ user }: { user: User | null }) {
 }
 
 export default function App() {
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<AuthMode>('login');
   const [sessionToken, setSessionToken] = useState('');
   const [email, setEmail] = useState('');
@@ -1801,7 +1813,14 @@ export default function App() {
     return (
       <SafeAreaView style={styles.homeScreen}>
         <TopNavBar user={authenticatedUser} />
-        <View style={styles.roomsContentWrap}>
+        <View
+          style={[
+            styles.roomsContentWrap,
+            {
+              paddingBottom: 104 + Math.max(insets.bottom, 8),
+            },
+          ]}
+        >
           {activeNav === 'settings' ? (
             <View style={styles.profileWrap}>
               <View style={styles.profileCard}>
@@ -2570,7 +2589,7 @@ export default function App() {
           </SafeAreaView>
         </Modal>
 
-        <BottomNavBar activeKey={activeNav} onSelect={onNavSelect} />
+        <BottomNavBar activeKey={activeNav} onSelect={onNavSelect} bottomInset={insets.bottom} />
         <StatusBar style="light" />
       </SafeAreaView>
     );
