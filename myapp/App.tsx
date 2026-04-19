@@ -1229,7 +1229,7 @@ export default function App() {
       <View style={styles.homeScreen}>
         <ActivityIndicator color="#B8C3FF" />
         <Text style={styles.restoreText}>Restoring session...</Text>
-        <StatusBar style="light" />
+        <StatusBar hidden style="light" />
       </View>
     );
   }
@@ -1917,7 +1917,7 @@ export default function App() {
         </Modal>
 
         <BottomNavBar activeKey={activeNav} onSelect={onNavSelect} />
-        <StatusBar style="light" />
+        <StatusBar hidden style="light" />
       </SafeAreaView>
     );
   }
@@ -2015,7 +2015,7 @@ export default function App() {
         </View>
       </View>
 
-      <StatusBar style="light" />
+      <StatusBar hidden style="light" />
     </KeyboardAvoidingView>
   );
 }
