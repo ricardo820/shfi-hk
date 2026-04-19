@@ -843,46 +843,142 @@ export default function App() {
     if (!authenticatedUser) {
       return {
         userDebt: 0,
-        communalDebt: 0,
-        personalAssignedDebt: 0,
+        owedToUser: 0,
       };
     }
 
-    const memberCount = Math.max(roomMembers.length, 1);
+    const currentUserId = String(authenticatedUser.id);
+    const roomMemberIds = Array.from(new Set(roomMembers.map((member) => String(member.user.id))));
 
-    const totals = roomTransactions.reduce(
-      (accumulator, transaction) => {
-        transaction.items.forEach((item) => {
-          const taken = item.taken;
-          const remainingCount =
-            typeof taken?.remainingCount === 'number'
-              ? taken.remainingCount
-              : item.itemCount - (taken?.takenCount ?? 0);
+    const ledger = new Map<string, Map<string, number>>();
 
-          const communalPortion = Math.max(remainingCount, 0) * item.unitPrice;
-          accumulator.communalDebt += communalPortion;
+    const getEdgeAmount = (debtorId: string, creditorId: string): number => {
+      return ledger.get(debtorId)?.get(creditorId) ?? 0;
+    };
 
-          const assignedToCurrentUser = (taken?.takenBy ?? [])
-            .filter((entry) => String(entry.userId) === String(authenticatedUser.id))
-            .reduce((sum, entry) => sum + entry.quantity * item.unitPrice, 0);
+    const setEdgeAmount = (debtorId: string, creditorId: string, amount: number) => {
+      if (amount <= 0) {
+        const debtorEdges = ledger.get(debtorId);
+        if (!debtorEdges) {
+          return;
+        }
 
-          accumulator.personalAssignedDebt += assignedToCurrentUser;
+        debtorEdges.delete(creditorId);
+        if (debtorEdges.size === 0) {
+          ledger.delete(debtorId);
+        }
+        return;
+      }
+
+      const debtorEdges = ledger.get(debtorId) ?? new Map<string, number>();
+      debtorEdges.set(creditorId, amount);
+      ledger.set(debtorId, debtorEdges);
+    };
+
+    const addDebt = (debtorId: string, creditorId: string, amount: number) => {
+      if (!Number.isFinite(amount) || amount <= 0 || debtorId === creditorId) {
+        return;
+      }
+
+      const previousAmount = getEdgeAmount(debtorId, creditorId);
+      setEdgeAmount(debtorId, creditorId, previousAmount + amount);
+    };
+
+    roomTransactions.forEach((transaction) => {
+      const ownerUserId = String(transaction.owner.userId);
+
+      transaction.items.forEach((item) => {
+        if (!Number.isFinite(item.unitPrice) || item.unitPrice <= 0) {
+          return;
+        }
+
+        const takenBy = item.taken?.takenBy ?? [];
+
+        takenBy.forEach((entry) => {
+          if (!Number.isFinite(entry.quantity) || entry.quantity <= 0) {
+            return;
+          }
+
+          addDebt(String(entry.userId), ownerUserId, entry.quantity * item.unitPrice);
         });
 
-        return accumulator;
-      },
-      {
-        communalDebt: 0,
-        personalAssignedDebt: 0,
-      }
+        const allocatedQuantity = takenBy.reduce(
+          (sum, entry) => sum + (Number.isFinite(entry.quantity) ? Math.max(0, entry.quantity) : 0),
+          0
+        );
+
+        const computedRemaining = item.itemCount - allocatedQuantity;
+        const remainingCount =
+          item.taken && Number.isFinite(item.taken.remainingCount)
+            ? Math.max(0, item.taken.remainingCount)
+            : Math.max(0, computedRemaining);
+
+        if (remainingCount <= 0) {
+          return;
+        }
+
+        const participants = roomMemberIds.length > 0
+          ? roomMemberIds
+          : Array.from(new Set([ownerUserId, currentUserId]));
+        const participantCount = Math.max(participants.length, 1);
+        const communalShare = (remainingCount * item.unitPrice) / participantCount;
+
+        participants.forEach((participantId) => {
+          addDebt(participantId, ownerUserId, communalShare);
+        });
+      });
+    });
+
+    const allUserIds = Array.from(
+      new Set([
+        ...Array.from(ledger.keys()),
+        ...Array.from(ledger.values()).flatMap((creditors) => Array.from(creditors.keys())),
+      ])
     );
 
-    const userDebt = totals.communalDebt / memberCount + totals.personalAssignedDebt;
+    const netLedger = new Map<string, Map<string, number>>();
+
+    const setNetDebt = (debtorId: string, creditorId: string, amount: number) => {
+      if (amount <= 0 || debtorId === creditorId) {
+        return;
+      }
+
+      const debtorEdges = netLedger.get(debtorId) ?? new Map<string, number>();
+      debtorEdges.set(creditorId, amount);
+      netLedger.set(debtorId, debtorEdges);
+    };
+
+    for (let indexA = 0; indexA < allUserIds.length; indexA += 1) {
+      for (let indexB = indexA + 1; indexB < allUserIds.length; indexB += 1) {
+        const userA = allUserIds[indexA];
+        const userB = allUserIds[indexB];
+        const amountAtoB = getEdgeAmount(userA, userB);
+        const amountBtoA = getEdgeAmount(userB, userA);
+        const netAmount = amountAtoB - amountBtoA;
+
+        if (netAmount > 0) {
+          setNetDebt(userA, userB, netAmount);
+        } else if (netAmount < 0) {
+          setNetDebt(userB, userA, -netAmount);
+        }
+      }
+    }
+
+    const userDebt = Array.from(netLedger.get(currentUserId)?.entries() ?? [])
+      .filter(([creditorId]) => creditorId !== currentUserId)
+      .reduce((sum, [, amount]) => sum + amount, 0);
+
+    const owedToUser = Array.from(netLedger.entries()).reduce((sum, [debtorId, creditors]) => {
+      if (debtorId === currentUserId) {
+        return sum;
+      }
+
+      return sum + (creditors.get(currentUserId) ?? 0);
+    }, 0);
 
     return {
       userDebt,
-      communalDebt: totals.communalDebt,
-      personalAssignedDebt: totals.personalAssignedDebt,
+      owedToUser,
     };
   };
 
@@ -1288,13 +1384,13 @@ export default function App() {
 
                     return (
                       <>
-                        <Text style={styles.debtTitle}>Your Debt</Text>
+                        <Text style={styles.debtTitle}>Your Netted Debt</Text>
                         <Text style={styles.debtValue}>${debt.userDebt.toFixed(2)}</Text>
                         <Text style={styles.debtMeta}>
-                          Communal share: ${(debt.communalDebt / Math.max(roomMembers.length, 1)).toFixed(2)}
+                          Sum of your debts to all other room members.
                         </Text>
                         <Text style={styles.debtMeta}>
-                          Your assigned items: ${debt.personalAssignedDebt.toFixed(2)}
+                          Others owe you: ${debt.owedToUser.toFixed(2)}
                         </Text>
                       </>
                     );

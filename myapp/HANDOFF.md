@@ -86,6 +86,13 @@
   - Room detail now displays computed user debt summary with formula:
     - `userDebt = (communalDebt / memberCount) + personalAssignedDebt`
     - communal debt comes from unassigned item remainder.
+  - Debt calculation was upgraded to owner-aware pairwise netting:
+    - every debt edge is tracked as `debtor -> transactionOwner` for assigned and communal portions
+    - communal remainder is distributed across room members, but self-debt (`owner -> owner`) is ignored
+    - anti-transitive netting is applied per user pair (if A owes B and B owes A, only the difference remains)
+    - room debt card now shows:
+      - `Your Netted Debt`: sum of user debts toward all other members (excluding self)
+      - `Others owe you`: net receivable from other members after pairwise cancellation.
 - **Authenticated logout path improved**:
   - Logout is available from Profile page.
   - Logout clears persisted token/user, resets auth state, and returns user to login/register flow.
