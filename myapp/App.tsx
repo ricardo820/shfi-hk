@@ -301,8 +301,9 @@ export default function App() {
         listRoomTransactions(room.id),
       ]);
       setRoomMembers(membersResponse.members ?? []);
-      setMembersExpanded(false);
-      setRoomTransactions(transactionsResponse.transactions ?? []);
+      const txs = transactionsResponse.transactions ?? [];
+      setRoomTransactions(txs);
+      setMembersExpanded(txs.length === 0);
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const message =
@@ -1676,13 +1677,6 @@ export default function App() {
                 <View style={styles.roomActionRow}>
                   <Pressable
                     style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
-                    onPress={() => setInviteModalVisible(true)}
-                  >
-                    <MaterialIcons name="qr-code" size={20} color="#B8C3FF" />
-                    <Text style={styles.roomActionText}>Invite by QR</Text>
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [styles.roomActionButton, pressed && styles.addRoomButtonPressed]}
                     onPress={openCreateTransactionModal}
                   >
                     <MaterialIcons name="add-circle" size={20} color="#B8C3FF" />
@@ -1737,16 +1731,29 @@ export default function App() {
                         />
                       </Pressable>
                       {membersExpanded ? (
-                        roomMembers.length > 0 ? (
-                          roomMembers.map((entry) => (
-                            <View key={entry.user.id} style={styles.memberRow}>
-                              <Text style={styles.memberEmail}>{entry.user.email}</Text>
-                              <Text style={styles.memberRole}>{entry.membership.role}</Text>
-                            </View>
-                          ))
-                        ) : (
-                          <Text style={styles.emptyStateText}>No members found.</Text>
-                        )
+                        <View>
+                          {roomMembers.length > 0 ? (
+                            roomMembers.map((entry) => (
+                              <View key={entry.user.id} style={styles.memberRow}>
+                                <Text style={styles.memberEmail}>{entry.user.email}</Text>
+                                <Text style={styles.memberRole}>{entry.membership.role}</Text>
+                              </View>
+                            ))
+                          ) : (
+                            <Text style={styles.emptyStateText}>No members found.</Text>
+                          )}
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.roomActionButton,
+                              pressed && styles.addRoomButtonPressed,
+                              { marginTop: 12, flexDirection: 'row', paddingVertical: 14, gap: 8 },
+                            ]}
+                            onPress={() => setInviteModalVisible(true)}
+                          >
+                            <MaterialIcons name="qr-code" size={20} color="#B8C3FF" />
+                            <Text style={styles.roomActionText}>Invite by QR</Text>
+                          </Pressable>
+                        </View>
                       ) : null}
                     </View>
 
@@ -2928,6 +2935,8 @@ const styles = StyleSheet.create({
     height: 220,
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   inviteCodeText: {
     color: '#C4C5D9',
@@ -2937,10 +2946,10 @@ const styles = StyleSheet.create({
   },
   txInputRow: {
     flexDirection: 'row',
-    gap: 8,
   },
   txInputHalf: {
     flex: 1,
+    gap: 8,
   },
   restoreText: {
     color: '#C4C5D9',
