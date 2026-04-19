@@ -93,6 +93,12 @@
     - room debt card now shows:
       - `Your Netted Debt`: sum of user debts toward all other members (excluding self)
       - `Others owe you`: net receivable from other members after pairwise cancellation.
+  - Debt simplification was further extended to close multi-hop chains of any length:
+    - converts raw owner-based edges into per-user net balances (creditors vs debtors)
+    - settles balances globally so chains such as `A->B`, `A->C`, `B->C` collapse into minimal final obligations
+    - applies user-level netting so amounts owed **to** the current user reduce what the current user owes before display.
+  - Debt card display rule update:
+    - `Others owe you: $XX` is shown only when `Your Netted Debt` is exactly `$0.00`.
 - **Authenticated logout path improved**:
   - Logout is available from Profile page.
   - Logout clears persisted token/user, resets auth state, and returns user to login/register flow.

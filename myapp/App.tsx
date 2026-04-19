@@ -850,29 +850,29 @@ export default function App() {
     const currentUserId = String(authenticatedUser.id);
     const roomMemberIds = Array.from(new Set(roomMembers.map((member) => String(member.user.id))));
 
-    const ledger = new Map<string, Map<string, number>>();
+    const rawLedger = new Map<string, Map<string, number>>();
 
     const getEdgeAmount = (debtorId: string, creditorId: string): number => {
-      return ledger.get(debtorId)?.get(creditorId) ?? 0;
+      return rawLedger.get(debtorId)?.get(creditorId) ?? 0;
     };
 
     const setEdgeAmount = (debtorId: string, creditorId: string, amount: number) => {
       if (amount <= 0) {
-        const debtorEdges = ledger.get(debtorId);
+        const debtorEdges = rawLedger.get(debtorId);
         if (!debtorEdges) {
           return;
         }
 
         debtorEdges.delete(creditorId);
         if (debtorEdges.size === 0) {
-          ledger.delete(debtorId);
+          rawLedger.delete(debtorId);
         }
         return;
       }
 
-      const debtorEdges = ledger.get(debtorId) ?? new Map<string, number>();
+      const debtorEdges = rawLedger.get(debtorId) ?? new Map<string, number>();
       debtorEdges.set(creditorId, amount);
-      ledger.set(debtorId, debtorEdges);
+      rawLedger.set(debtorId, debtorEdges);
     };
 
     const addDebt = (debtorId: string, creditorId: string, amount: number) => {
@@ -929,56 +929,78 @@ export default function App() {
       });
     });
 
-    const allUserIds = Array.from(
-      new Set([
-        ...Array.from(ledger.keys()),
-        ...Array.from(ledger.values()).flatMap((creditors) => Array.from(creditors.keys())),
-      ])
-    );
+    const balanceByUser = new Map<string, number>();
 
-    const netLedger = new Map<string, Map<string, number>>();
-
-    const setNetDebt = (debtorId: string, creditorId: string, amount: number) => {
-      if (amount <= 0 || debtorId === creditorId) {
+    const adjustBalance = (userId: string, amount: number) => {
+      if (!Number.isFinite(amount) || amount === 0) {
         return;
       }
 
-      const debtorEdges = netLedger.get(debtorId) ?? new Map<string, number>();
-      debtorEdges.set(creditorId, amount);
-      netLedger.set(debtorId, debtorEdges);
+      balanceByUser.set(userId, (balanceByUser.get(userId) ?? 0) + amount);
     };
 
-    for (let indexA = 0; indexA < allUserIds.length; indexA += 1) {
-      for (let indexB = indexA + 1; indexB < allUserIds.length; indexB += 1) {
-        const userA = allUserIds[indexA];
-        const userB = allUserIds[indexB];
-        const amountAtoB = getEdgeAmount(userA, userB);
-        const amountBtoA = getEdgeAmount(userB, userA);
-        const netAmount = amountAtoB - amountBtoA;
-
-        if (netAmount > 0) {
-          setNetDebt(userA, userB, netAmount);
-        } else if (netAmount < 0) {
-          setNetDebt(userB, userA, -netAmount);
+    rawLedger.forEach((creditors, debtorId) => {
+      creditors.forEach((amount, creditorId) => {
+        if (!Number.isFinite(amount) || amount <= 0 || debtorId === creditorId) {
+          return;
         }
+
+        adjustBalance(debtorId, -amount);
+        adjustBalance(creditorId, amount);
+      });
+    });
+
+    roomMemberIds.forEach((memberId) => {
+      if (!balanceByUser.has(memberId)) {
+        balanceByUser.set(memberId, 0);
+      }
+    });
+
+    const debtors = Array.from(balanceByUser.entries())
+      .filter(([, balance]) => balance < -1e-9)
+      .map(([userId, balance]) => ({ userId, amount: -balance }));
+
+    const creditors = Array.from(balanceByUser.entries())
+      .filter(([, balance]) => balance > 1e-9)
+      .map(([userId, balance]) => ({ userId, amount: balance }));
+
+    let debtorIndex = 0;
+    let creditorIndex = 0;
+
+    let userDebt = 0;
+    let owedToUser = 0;
+
+    while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
+      const debtor = debtors[debtorIndex];
+      const creditor = creditors[creditorIndex];
+      const settledAmount = Math.min(debtor.amount, creditor.amount);
+
+      if (debtor.userId === currentUserId && creditor.userId !== currentUserId) {
+        userDebt += settledAmount;
+      }
+
+      if (creditor.userId === currentUserId && debtor.userId !== currentUserId) {
+        owedToUser += settledAmount;
+      }
+
+      debtor.amount -= settledAmount;
+      creditor.amount -= settledAmount;
+
+      if (debtor.amount <= 1e-9) {
+        debtorIndex += 1;
+      }
+
+      if (creditor.amount <= 1e-9) {
+        creditorIndex += 1;
       }
     }
 
-    const userDebt = Array.from(netLedger.get(currentUserId)?.entries() ?? [])
-      .filter(([creditorId]) => creditorId !== currentUserId)
-      .reduce((sum, [, amount]) => sum + amount, 0);
-
-    const owedToUser = Array.from(netLedger.entries()).reduce((sum, [debtorId, creditors]) => {
-      if (debtorId === currentUserId) {
-        return sum;
-      }
-
-      return sum + (creditors.get(currentUserId) ?? 0);
-    }, 0);
+    const nettedDebt = Math.max(0, userDebt - owedToUser);
+    const nettedOwedToUser = nettedDebt === 0 ? Math.max(0, owedToUser - userDebt) : 0;
 
     return {
-      userDebt,
-      owedToUser,
+      userDebt: nettedDebt,
+      owedToUser: nettedOwedToUser,
     };
   };
 
@@ -1389,9 +1411,11 @@ export default function App() {
                         <Text style={styles.debtMeta}>
                           Sum of your debts to all other room members.
                         </Text>
-                        <Text style={styles.debtMeta}>
-                          Others owe you: ${debt.owedToUser.toFixed(2)}
-                        </Text>
+                        {debt.userDebt === 0 ? (
+                          <Text style={styles.debtMeta}>
+                            Others owe you: ${debt.owedToUser.toFixed(2)}
+                          </Text>
+                        ) : null}
                       </>
                     );
                   })()}
