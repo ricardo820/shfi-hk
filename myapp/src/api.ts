@@ -182,6 +182,48 @@ export interface AssignItemResponse {
   message?: string;
 }
 
+export interface NotificationActor {
+  userId: string;
+  email: string;
+}
+
+export interface RoomNotification {
+  id: string;
+  roomId?: string;
+  type: 'transaction_added' | 'debt_pushed';
+  actorUserId?: string;
+  actor?: NotificationActor;
+  payload: Record<string, unknown>;
+  isRead?: boolean;
+  deliveredAt?: string;
+  createdAt: string;
+}
+
+export interface PublishTransactionAddedNotificationResponse {
+  message: string;
+  notification: RoomNotification;
+  recipientIds: number[];
+}
+
+export interface PublishDebtPushedNotificationPayload {
+  fromUserId: number;
+  toUserId: number;
+  amount: number;
+  currency: string;
+  note?: string;
+}
+
+export interface PublishDebtPushedNotificationResponse {
+  message: string;
+  notification: RoomNotification;
+  recipientIds: number[];
+}
+
+export interface ListRoomNotificationsResponse {
+  roomId: number;
+  notifications: RoomNotification[];
+}
+
 export interface ReceiptScanItem {
   name: string;
   quantity: number;
@@ -1042,6 +1084,35 @@ export const assignRoomTransactionItem = async (
     `/rooms/${roomId}/transactions/${transactionId}/items/${itemId}/assign`,
     payload
   );
+  return response.data;
+};
+
+export const publishTransactionAddedNotification = async (
+  roomId: string,
+  transactionId: number
+): Promise<PublishTransactionAddedNotificationResponse> => {
+  const response = await api.post<PublishTransactionAddedNotificationResponse>(
+    `/rooms/${roomId}/notifications/transaction-added`,
+    { transactionId }
+  );
+  return response.data;
+};
+
+export const publishDebtPushedNotification = async (
+  roomId: string,
+  payload: PublishDebtPushedNotificationPayload
+): Promise<PublishDebtPushedNotificationResponse> => {
+  const response = await api.post<PublishDebtPushedNotificationResponse>(
+    `/rooms/${roomId}/notifications/debt-pushed`,
+    payload
+  );
+  return response.data;
+};
+
+export const listRoomNotifications = async (
+  roomId: string
+): Promise<ListRoomNotificationsResponse> => {
+  const response = await api.get<ListRoomNotificationsResponse>(`/rooms/${roomId}/notifications`);
   return response.data;
 };
 

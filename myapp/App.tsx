@@ -19,6 +19,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { Audio } from 'expo-av';
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
 import QRCode from 'react-native-qrcode-svg';
 import axios from 'axios';
 import {
@@ -37,12 +39,23 @@ import {
   ReceiptScanResult,
   RoomTransaction,
   assignRoomTransactionItem,
+  publishDebtPushedNotification,
+  publishTransactionAddedNotification,
   scanReceiptWithMindee,
   setAuthToken,
   takeRoomTransactionItem,
   updateRoomTransaction,
   User,
 } from './src/api';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
 type AuthMode = 'login' | 'register';
 
@@ -151,6 +164,7 @@ function TopNavBar({ user }: { user: User | null }) {
 
 export default function App() {
   const [mode, setMode] = useState<AuthMode>('login');
+  const [sessionToken, setSessionToken] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -200,6 +214,9 @@ export default function App() {
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const [settleLoadingRoomId, setSettleLoadingRoomId] = useState<string | null>(null);
   const [settleAllLoading, setSettleAllLoading] = useState(false);
+  const [debtNotificationLoading, setDebtNotificationLoading] = useState(false);
+  const [pushStatusMessage, setPushStatusMessage] = useState('');
+  const [pushErrorMessage, setPushErrorMessage] = useState('');
   const [isPaymentGateVisible, setPaymentGateVisible] = useState(false);
   const [paymentGateAmount, setPaymentGateAmount] = useState(0);
   const [paymentGateContext, setPaymentGateContext] = useState('');
@@ -207,9 +224,37 @@ export default function App() {
   const liveReceiptScanInFlightRef = useRef(false);
   const voiceRecordingRef = useRef<Audio.Recording | null>(null);
   const paymentGateResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+  const notificationsSocketRef = useRef<WebSocket | null>(null);
+  const notificationReceivedListener = useRef<Notifications.EventSubscription | null>(null);
+  const openedRoomRef = useRef<Room | null>(null);
 
   const getDefaultAllocations = () =>
     Object.fromEntries(roomMembers.map((member) => [String(member.user.id), '0']));
+
+  const formatRoomNotificationMessage = (notification: {
+    type?: string;
+    payload?: Record<string, unknown>;
+    actorUserId?: string;
+  }): string => {
+    if (notification.type === 'transaction_added') {
+      const transactionId = notification.payload?.transactionId;
+      return `New transaction added${typeof transactionId === 'number' ? ` (#${transactionId})` : ''}.`;
+    }
+
+    if (notification.type === 'debt_pushed') {
+      const amount = notification.payload?.amount;
+      const currency = typeof notification.payload?.currency === 'string'
+        ? notification.payload.currency
+        : 'EUR';
+      if (typeof amount === 'number') {
+        return `Debt payment pushed: ${amount.toFixed(2)} ${currency}.`;
+      }
+
+      return 'Debt payment notification received.';
+    }
+
+    return 'Room notification received.';
+  };
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -222,11 +267,13 @@ export default function App() {
         if (tokenValue && userValue) {
           const parsedUser = JSON.parse(userValue) as User;
           setAuthToken(tokenValue);
+          setSessionToken(tokenValue);
           setAuthenticatedUser(parsedUser);
           setActiveNav('home');
         }
       } catch {
         setAuthToken(null);
+        setSessionToken('');
         await Promise.all([
           AsyncStorage.removeItem(STORAGE_KEYS.token),
           AsyncStorage.removeItem(STORAGE_KEYS.user),
@@ -237,6 +284,139 @@ export default function App() {
     };
 
     void restoreSession();
+  }, []);
+
+  useEffect(() => {
+    const registerForPushNotifications = async () => {
+      try {
+        setPushErrorMessage('');
+
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'Default',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#2E5BFF',
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          });
+        }
+
+        const existingStatus = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus.status;
+
+        if (finalStatus !== 'granted') {
+          const requested = await Notifications.requestPermissionsAsync();
+          finalStatus = requested.status;
+        }
+
+        if (finalStatus !== 'granted') {
+          setPushErrorMessage('Push notification permissions were not granted.');
+          return;
+        }
+
+        if (!Device.isDevice) {
+          setPushStatusMessage('Push registration requires a physical device.');
+          return;
+        }
+
+        try {
+          const tokenResponse = await Notifications.getExpoPushTokenAsync();
+          setPushStatusMessage(`Device registered for notifications (${tokenResponse.data.slice(0, 14)}...).`);
+        } catch {
+          setPushStatusMessage('Notification permissions granted. Device registration completed.');
+        }
+      } catch {
+        setPushErrorMessage('Unable to register device for notifications.');
+      }
+    };
+
+    void registerForPushNotifications();
+  }, []);
+
+  useEffect(() => {
+    openedRoomRef.current = openedRoom;
+  }, [openedRoom]);
+
+  useEffect(() => {
+    if (!sessionToken || !authenticatedUser) {
+      return;
+    }
+
+    const socket = new WebSocket(
+      `ws://hack.marrb.net:3000/ws/notifications?token=${encodeURIComponent(sessionToken)}`
+    );
+    notificationsSocketRef.current = socket;
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ event: 'ping' }));
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(String(event.data)) as {
+          event?: string;
+          notification?: {
+            roomId?: string;
+            type?: string;
+            payload?: Record<string, unknown>;
+            actorUserId?: string;
+          };
+        };
+
+        if (parsed.event !== 'room_notification' || !parsed.notification) {
+          return;
+        }
+
+        void Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Room Notification',
+            body: formatRoomNotificationMessage(parsed.notification),
+            sound: 'default',
+            priority: Notifications.AndroidNotificationPriority.MAX,
+          },
+          trigger: null,
+        });
+
+        const activeOpenedRoom = openedRoomRef.current;
+        if (activeOpenedRoom && String(parsed.notification.roomId) === String(activeOpenedRoom.id)) {
+          void fetchRoomDetails(activeOpenedRoom);
+        }
+      } catch {
+        // ignore malformed notification payloads
+      }
+    };
+
+    socket.onerror = () => {
+      setPushErrorMessage('Realtime notifications disconnected.');
+    };
+
+    const pingInterval = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ event: 'ping' }));
+      }
+    }, 25000);
+
+    return () => {
+      clearInterval(pingInterval);
+      if (notificationsSocketRef.current === socket) {
+        notificationsSocketRef.current = null;
+      }
+      socket.close();
+    };
+  }, [sessionToken, authenticatedUser]);
+
+  useEffect(() => {
+    notificationReceivedListener.current = Notifications.addNotificationReceivedListener(() => {
+      const activeOpenedRoom = openedRoomRef.current;
+      if (activeOpenedRoom) {
+        void fetchRoomDetails(activeOpenedRoom);
+      }
+    });
+
+    return () => {
+      notificationReceivedListener.current?.remove();
+      notificationReceivedListener.current = null;
+    };
   }, []);
 
   const primaryButtonLabel = useMemo(
@@ -312,6 +492,7 @@ export default function App() {
 
   const handleLogout = () => {
     setAuthToken(null);
+    setSessionToken('');
     void Promise.all([
       AsyncStorage.removeItem(STORAGE_KEYS.token),
       AsyncStorage.removeItem(STORAGE_KEYS.user),
@@ -986,6 +1167,18 @@ export default function App() {
         userId: creditorUserId,
         quantity: 1,
       });
+
+      try {
+        await publishDebtPushedNotification(roomId, {
+          fromUserId: authenticatedUser.id,
+          toUserId: creditorUserId,
+          amount,
+          currency: 'EUR',
+          note: 'Debt settled via payment gate',
+        });
+      } catch (notificationError) {
+        console.warn('[Notifications] Failed to publish debt-pushed notification', notificationError);
+      }
     }
   };
 
@@ -1132,6 +1325,62 @@ export default function App() {
     } finally {
       setSettleAllLoading(false);
       await fetchRooms();
+    }
+  };
+
+  const sendDebtNotificationForOpenedRoom = async () => {
+    if (!authenticatedUser || !openedRoom) {
+      return;
+    }
+
+    try {
+      setDebtNotificationLoading(true);
+      setRoomDetailsError('');
+
+      const memberIds = Array.from(new Set(roomMembers.map((member) => String(member.user.id))));
+      const transfers = buildSettlementTransfers(roomTransactions, memberIds);
+      const receivableTransfers = transfers.filter(
+        (transfer) => transfer.creditorId === String(authenticatedUser.id)
+      );
+
+      if (receivableTransfers.length === 0) {
+        setRoomDetailsStatus('No outstanding debtor notifications to send.');
+        return;
+      }
+
+      await Promise.all(
+        receivableTransfers.map((transfer) =>
+          publishDebtPushedNotification(openedRoom.id, {
+            fromUserId: Number(transfer.debtorId),
+            toUserId: authenticatedUser.id,
+            amount: Number(transfer.amount.toFixed(2)),
+            currency: 'EUR',
+            note: 'Debt reminder notification',
+          })
+        )
+      );
+
+      setRoomDetailsStatus('Debt notifications sent to room members.');
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const serverMessage =
+          typeof error.response?.data?.message === 'string'
+            ? error.response.data.message
+            : '';
+
+        if (error.response?.status === 403) {
+          setRoomDetailsError(
+            serverMessage || 'Server rejected debt notification (only debtor can publish debt-pushed event).'
+          );
+          return;
+        }
+
+        setRoomDetailsError(serverMessage || 'Unable to send debt notification right now.');
+      } else {
+        setRoomDetailsError('Unable to send debt notification right now.');
+      }
+    } finally {
+      setDebtNotificationLoading(false);
     }
   };
 
@@ -1290,6 +1539,17 @@ export default function App() {
             });
           })
         );
+      }
+
+      if (!editingTransaction && savedTransactionId) {
+        const parsedTransactionId = Number(savedTransactionId);
+        if (Number.isFinite(parsedTransactionId)) {
+          try {
+            await publishTransactionAddedNotification(openedRoom.id, parsedTransactionId);
+          } catch (notificationError) {
+            console.warn('[Notifications] Failed to publish transaction-added notification', notificationError);
+          }
+        }
       }
 
       setAddTransactionModalVisible(false);
@@ -1469,6 +1729,7 @@ export default function App() {
       if (mode === 'login') {
         const response = await login({ email: normalizedEmail, password: trimmedPassword });
         setAuthToken(response.token);
+        setSessionToken(response.token);
         await Promise.all([
           AsyncStorage.setItem(STORAGE_KEYS.token, response.token),
           AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(response.user)),
@@ -1559,23 +1820,44 @@ export default function App() {
                   <Text style={styles.roomsHeaderKicker}>Room</Text>
                   <View style={styles.roomOpenHeaderRow}>
                     <Text style={styles.roomsHeaderTitleSmall}>{openedRoom.name}</Text>
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.settleButton,
-                        pressed && styles.addRoomButtonPressed,
-                        (settleLoadingRoomId === openedRoom.id || settleAllLoading || roomDetailsLoading) && styles.buttonDisabled,
-                      ]}
-                      onPress={() => {
-                        void settleRoomDebt(openedRoom);
-                      }}
-                      disabled={Boolean(settleLoadingRoomId) || settleAllLoading || roomDetailsLoading}
-                    >
-                      {settleLoadingRoomId === openedRoom.id ? (
-                        <ActivityIndicator color="#EFEFFF" size="small" />
-                      ) : (
-                        <Text style={styles.settleButtonText}>settle</Text>
-                      )}
-                    </Pressable>
+                    <View style={styles.roomHeaderActionsRow}>
+                      {computeRoomDebt().owedToUser > 0 ? (
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.settleButton,
+                            pressed && styles.addRoomButtonPressed,
+                            debtNotificationLoading && styles.buttonDisabled,
+                          ]}
+                          onPress={() => {
+                            void sendDebtNotificationForOpenedRoom();
+                          }}
+                          disabled={debtNotificationLoading || roomDetailsLoading}
+                        >
+                          {debtNotificationLoading ? (
+                            <ActivityIndicator color="#EFEFFF" size="small" />
+                          ) : (
+                            <Text style={styles.settleButtonText}>notify</Text>
+                          )}
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.settleButton,
+                          pressed && styles.addRoomButtonPressed,
+                          (settleLoadingRoomId === openedRoom.id || settleAllLoading || roomDetailsLoading) && styles.buttonDisabled,
+                        ]}
+                        onPress={() => {
+                          void settleRoomDebt(openedRoom);
+                        }}
+                        disabled={Boolean(settleLoadingRoomId) || settleAllLoading || roomDetailsLoading}
+                      >
+                        {settleLoadingRoomId === openedRoom.id ? (
+                          <ActivityIndicator color="#EFEFFF" size="small" />
+                        ) : (
+                          <Text style={styles.settleButtonText}>settle</Text>
+                        )}
+                      </Pressable>
+                    </View>
                   </View>
                 </View>
 
@@ -1707,6 +1989,8 @@ export default function App() {
 
                 {roomDetailsError ? <Text style={styles.roomsErrorText}>{roomDetailsError}</Text> : null}
                 {roomDetailsStatus ? <Text style={styles.roomsSuccessText}>{roomDetailsStatus}</Text> : null}
+                {pushErrorMessage ? <Text style={styles.roomsErrorText}>{pushErrorMessage}</Text> : null}
+                {pushStatusMessage ? <Text style={styles.roomsSuccessText}>{pushStatusMessage}</Text> : null}
               </ScrollView>
             </>
           ) : (
@@ -1781,6 +2065,8 @@ export default function App() {
 
                 {roomsError ? <Text style={styles.roomsErrorText}>{roomsError}</Text> : null}
                 {roomStatusMessage ? <Text style={styles.roomsSuccessText}>{roomStatusMessage}</Text> : null}
+                {pushErrorMessage ? <Text style={styles.roomsErrorText}>{pushErrorMessage}</Text> : null}
+                {pushStatusMessage ? <Text style={styles.roomsSuccessText}>{pushStatusMessage}</Text> : null}
               </ScrollView>
             </>
           )}
@@ -2703,6 +2989,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  roomHeaderActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   roomsHeaderTitleSmall: {
     color: '#FFFFFF',

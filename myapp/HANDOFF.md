@@ -118,6 +118,23 @@
     - assign settlement item to creditor via `POST /rooms/:roomId/transactions/:transactionId/items/:itemId/assign`
     - this creates reverse edges to negate current user debt according to the netted closure.
   - `settle all` performs one payment-gate confirmation for total amount across rooms, then applies settlement write-backs for each payable room.
+- **Notifications integration added**:
+  - Added notification REST API client methods in `src/api.ts`:
+    - `publishTransactionAddedNotification(roomId, transactionId)`
+    - `publishDebtPushedNotification(roomId, payload)`
+    - `listRoomNotifications(roomId)`
+  - Transaction create flow now publishes `transaction_added` notification after successful room transaction creation.
+  - Settlement flow now publishes `debt_pushed` notifications after debtor confirms payment and settlement write-back is applied.
+  - Added opened-room header `notify` button (visible when current user is net creditor in that room) to send debt notifications to server for outstanding debtor links.
+  - Added device notification registration with Expo Notifications:
+    - requests notification permission
+    - creates Android high-importance channel (`MAX`, public lockscreen visibility, vibration/light)
+    - attempts Expo push token retrieval and surfaces status in UI.
+  - Added realtime websocket connection to server notifications endpoint:
+    - connects to `ws://hack.marrb.net:3000/ws/notifications?token=<jwt>`
+    - sends periodic ping keepalive
+    - on `room_notification`, schedules local notification and refreshes currently opened room transactions.
+  - Added foreground notification listener to refresh opened room transaction list on incoming notifications.
 - **Rooms API client expanded** (`src/api.ts`):
   - Added typed methods:
     - `listRooms()`
